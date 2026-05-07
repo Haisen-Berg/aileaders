@@ -1,20 +1,22 @@
 "use client";
 
 import { useState, useRef } from "react";
-import {
-  Upload,
-  FileSpreadsheet,
-  AlertTriangle,
-  CheckCircle2,
-  XCircle,
-  Users,
-  Award,
-  MapPin,
-  Briefcase,
-  RefreshCw,
-  ExternalLink,
-  BarChart3,
-} from "lucide-react";
+
+// Inline SVG icons — no lucide-react dependency
+const IC = {
+  Upload: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>,
+  FileSpreadsheet: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></svg>,
+  AlertTriangle: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>,
+  CheckCircle2: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>,
+  XCircle: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>,
+  Users: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  Award: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>,
+  MapPin: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>,
+  Briefcase: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/></svg>,
+  RefreshCw: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>,
+  ExternalLink: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>,
+  BarChart3: (p: React.SVGProps<SVGSVGElement>) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>,
+};
 import { toast } from "sonner";
 import {
   PieChart,
@@ -169,7 +171,7 @@ export function UploadForm() {
         <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
         <div className="relative flex items-start gap-5">
           <div className="w-14 h-14 bg-blue-500/20 rounded-2xl flex items-center justify-center shrink-0 ring-1 ring-blue-400/30">
-            <FileSpreadsheet className="w-7 h-7 text-blue-300" />
+            <IC.FileSpreadsheet className="w-7 h-7 text-blue-300" />
           </div>
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Excel Файл Таҳлили</h1>
@@ -220,7 +222,7 @@ export function UploadForm() {
             {loading ? (
               <div className="space-y-4">
                 <div className="w-16 h-16 mx-auto bg-blue-100 rounded-2xl flex items-center justify-center">
-                  <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
+                  <IC.RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
                 </div>
                 <div>
                   <p className="text-base font-semibold text-slate-700">Таҳлил қилинмоқда...</p>
@@ -232,7 +234,7 @@ export function UploadForm() {
                 <div className={`w-20 h-20 mx-auto rounded-3xl flex items-center justify-center transition-all duration-200 ${
                   dragging ? "bg-blue-100 scale-110" : "bg-slate-100"
                 }`}>
-                  <Upload className={`w-9 h-9 transition-colors ${dragging ? "text-blue-500" : "text-slate-400"}`} />
+                  <IC.Upload className={`w-9 h-9 transition-colors ${dragging ? "text-blue-500" : "text-slate-400"}`} />
                 </div>
                 <div>
                   <p className="text-lg font-semibold text-slate-700">
@@ -241,7 +243,7 @@ export function UploadForm() {
                   <p className="text-sm text-slate-400 mt-1.5">ёки файлни танлаш учун bosing</p>
                 </div>
                 <span className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl cursor-pointer hover:bg-blue-700 transition-colors">
-                  <FileSpreadsheet className="w-4 h-4" />
+                  <IC.FileSpreadsheet className="w-4 h-4" />
                   Файл танлаш
                 </span>
                 <p className="text-xs text-slate-400">Фақат .xlsx · макс. 10 MB</p>
@@ -269,7 +271,7 @@ export function UploadForm() {
           <div className="flex items-center justify-between bg-white border border-slate-200 rounded-2xl px-5 py-3.5 shadow-sm">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 bg-emerald-100 rounded-xl flex items-center justify-center shrink-0">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                <IC.CheckCircle2 className="w-5 h-5 text-emerald-600" />
               </div>
               <div>
                 <p className="font-semibold text-slate-800 text-sm">{result.filename}</p>
@@ -283,7 +285,7 @@ export function UploadForm() {
               onClick={() => { setResult(null); setActiveTab("overview"); }}
               className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-700 transition-colors px-3 py-1.5 rounded-lg hover:bg-slate-100 cursor-pointer"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
+              <IC.RefreshCw className="w-3.5 h-3.5" />
               Янги файл
             </button>
           </div>
@@ -320,12 +322,12 @@ export function UploadForm() {
             <div className="space-y-5">
               {/* KPI grid */}
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                <KpiCard icon={<BarChart3 className="w-4 h-4" />} title="Жами сатрлар"    value={result.rowsTotal}   sub={result.rowsSkipped > 0 ? `${result.rowsSkipped} та бўш` : undefined} accent="bg-slate-50 border-slate-200 text-slate-900" />
-                <KpiCard icon={<Users className="w-4 h-4" />}    title="Иштирокчилар"  value={result.people}      accent="bg-blue-50 border-blue-200 text-blue-900" />
-                <KpiCard icon={<Award className="w-4 h-4" />}    title="Сертификатлар" value={result.certsTotal}  accent="bg-emerald-50 border-emerald-200 text-emerald-900" />
+                <KpiCard icon={<IC.BarChart3 className="w-4 h-4" />} title="Жами сатрлар"    value={result.rowsTotal}   sub={result.rowsSkipped > 0 ? `${result.rowsSkipped} та бўш` : undefined} accent="bg-slate-50 border-slate-200 text-slate-900" />
+                <KpiCard icon={<IC.Users className="w-4 h-4" />}    title="Иштирокчилар"  value={result.people}      accent="bg-blue-50 border-blue-200 text-blue-900" />
+                <KpiCard icon={<IC.Award className="w-4 h-4" />}    title="Сертификатлар" value={result.certsTotal}  accent="bg-emerald-50 border-emerald-200 text-emerald-900" />
                 <KpiCard icon={<span className="text-xs font-bold font-mono">AI</span>} title="AiStudy"    value={result.aistudy}  accent="bg-cyan-50 border-cyan-200 text-cyan-900" />
                 <KpiCard icon={<span className="text-xs font-bold font-mono">Co</span>} title="Coursera"   value={result.coursera} accent="bg-violet-50 border-violet-200 text-violet-900" />
-                <KpiCard icon={<CheckCircle2 className="w-4 h-4" />} title="Иккала платформа" value={result.both} sub="ҳар иккисини олганлар" accent="bg-amber-50 border-amber-200 text-amber-900" />
+                <KpiCard icon={<IC.CheckCircle2 className="w-4 h-4" />} title="Иккала платформа" value={result.both} sub="ҳар иккисини олганлар" accent="bg-amber-50 border-amber-200 text-amber-900" />
               </div>
 
               {/* Charts row */}
@@ -407,7 +409,7 @@ export function UploadForm() {
               {/* Alert banners */}
               {result.duplicatesInFile > 0 && (
                 <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-4">
-                  <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <IC.AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                   <div>
                     <p className="font-semibold text-amber-800 text-sm">Файл ичида дубликатлар топилди</p>
                     <p className="text-xs text-amber-700 mt-0.5">
@@ -418,7 +420,7 @@ export function UploadForm() {
               )}
               {result.errors.length > 0 && (
                 <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-2xl p-4">
-                  <XCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                  <IC.XCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
                   <div>
                     <p className="font-semibold text-red-800 text-sm">{result.errors.length} та хато аниқланди</p>
                     <p className="text-xs text-red-700 mt-0.5">
@@ -429,7 +431,7 @@ export function UploadForm() {
               )}
               {result.errors.length === 0 && result.duplicatesInFile === 0 && (
                 <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                  <IC.CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
                   <p className="font-semibold text-emerald-800 text-sm">Хатолар ёки дубликатлар топилмади — файл тоза!</p>
                 </div>
               )}
@@ -453,7 +455,7 @@ export function UploadForm() {
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2.5">
                         <span className="text-xs font-bold text-slate-300 w-5 text-right tabular-nums">{idx + 1}</span>
-                        <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                        <IC.MapPin className="w-3.5 h-3.5 text-slate-400" />
                         <span className="font-semibold text-slate-800 text-sm">{d.district}</span>
                       </div>
                       <div className="text-right">
@@ -505,7 +507,7 @@ export function UploadForm() {
                   <div key={p.position} className="bg-white border border-slate-200 rounded-2xl p-4 hover:shadow-sm transition-all">
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-2.5">
-                        <Briefcase className="w-4 h-4 text-slate-300" />
+                        <IC.Briefcase className="w-4 h-4 text-slate-300" />
                         <span className={`px-2.5 py-1 rounded-xl text-xs font-semibold border ${meta.badgeClass}`}>
                           {meta.label}
                         </span>
@@ -536,7 +538,7 @@ export function UploadForm() {
               {result.errors.length === 0 ? (
                 <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-12 text-center">
                   <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                    <CheckCircle2 className="w-8 h-8 text-emerald-500" />
+                    <IC.CheckCircle2 className="w-8 h-8 text-emerald-500" />
                   </div>
                   <p className="font-semibold text-emerald-800">Хатолар топилмади!</p>
                   <p className="text-sm text-emerald-600 mt-1">Барча ссылкалар тўғри форматда</p>
@@ -549,7 +551,7 @@ export function UploadForm() {
                   <div className="space-y-2">
                     {shownErrors.map((err, i) => (
                       <div key={i} className="flex items-start gap-3 bg-red-50 border border-red-100 rounded-xl p-3">
-                        <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                        <IC.XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
                         <p className="text-sm text-red-700 font-mono leading-relaxed break-all">{err}</p>
                       </div>
                     ))}
@@ -606,8 +608,8 @@ export function UploadForm() {
                             {row.aiUrl ? (
                               <a href={row.aiUrl} target="_blank" rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1 text-xs text-cyan-600 hover:underline cursor-pointer">
-                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                                <ExternalLink className="w-3 h-3 shrink-0" />
+                                <IC.CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <IC.ExternalLink className="w-3 h-3 shrink-0" />
                               </a>
                             ) : <span className="text-slate-200 text-xs">—</span>}
                           </td>
@@ -615,8 +617,8 @@ export function UploadForm() {
                             {row.coUrl ? (
                               <a href={row.coUrl} target="_blank" rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1 text-xs text-violet-600 hover:underline cursor-pointer">
-                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                                <ExternalLink className="w-3 h-3 shrink-0" />
+                                <IC.CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <IC.ExternalLink className="w-3 h-3 shrink-0" />
                               </a>
                             ) : <span className="text-slate-200 text-xs">—</span>}
                           </td>
