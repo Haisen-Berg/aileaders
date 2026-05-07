@@ -5,5 +5,6 @@
   "/api/check-link/route": "app/api/check-link/route.js",
   "/api/check-sample/route": "app/api/check-sample/route.js",
   "/api/check/route": "app/api/check/route.js",
+  "/api/verify-batch/route": "app/api/verify-batch/route.js",
   "/favicon.ico/route": "app/favicon.ico/route.js"
 }

@@ -1,0 +1,3 @@
+{
+  "/api/verify-batch/route": "app/api/verify-batch/route.js"
+}

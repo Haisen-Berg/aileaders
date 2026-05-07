@@ -22,6 +22,9 @@
     },
     "/api/check-sample": {
       "maxDuration": 60
+    },
+    "/api/verify-batch": {
+      "maxDuration": 60
     }
   }
 }

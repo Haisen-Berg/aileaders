@@ -52,6 +52,13 @@ export interface PreviewRow {
   hasErrors: boolean;
 }
 
+export interface CertItem {
+  url: string;
+  expectedName: string | null;
+  rowNumber: number;
+  platform: "aistudy" | "coursera";
+}
+
 export interface CheckResult {
   filename: string;
   rowsTotal: number;
@@ -70,6 +77,7 @@ export interface CheckResult {
   categoryStats: CategoryStat[];
   linkSample: LinkSampleSummary | null;
   allCertUrls: string[];
+  allCertItems: CertItem[];
   previewRows: PreviewRow[];
 }
 
@@ -117,6 +125,7 @@ export async function POST(req: NextRequest) {
   const personMap = new Map<string, PersonAcc>();
   const allErrors: ParsedError[] = [];
   const allCertUrls: string[] = [];
+  const allCertItems: CertItem[] = [];
   let certsTotal = 0;
   let dups = 0;
   let skipped = 0;
@@ -130,7 +139,15 @@ export async function POST(req: NextRequest) {
     const nonDupCerts = row.certificates.filter((c) => !duplicateHashes.has(c.urlHash));
     dups += row.certificates.length - nonDupCerts.length;
     certsTotal += nonDupCerts.length;
-    for (const c of nonDupCerts) allCertUrls.push(c.url);
+    for (const c of nonDupCerts) {
+      allCertUrls.push(c.url);
+      allCertItems.push({
+        url: c.url,
+        expectedName: row.fullName,
+        rowNumber: row.rowNumber,
+        platform: c.platform,
+      });
+    }
 
     const personKey = row.fullNameNormalized ?? `__row_${row.rowNumber}`;
     const hasAi = row.certificates.some((c) => c.platform === "aistudy");
@@ -251,6 +268,7 @@ export async function POST(req: NextRequest) {
     categoryStats,
     linkSample: null,
     allCertUrls,
+    allCertItems,
     previewRows,
   } satisfies CheckResult);
 }

@@ -105,6 +105,13 @@ interface PreviewRow {
   hasErrors: boolean;
 }
 
+interface CertItem {
+  url: string;
+  expectedName: string | null;
+  rowNumber: number;
+  platform: "aistudy" | "coursera";
+}
+
 interface CheckResult {
   filename: string;
   rowsTotal: number;
@@ -123,6 +130,7 @@ interface CheckResult {
   categoryStats: CategoryStat[];
   linkSample: LinkSampleSummary | null;
   allCertUrls: string[];
+  allCertItems: CertItem[];
   previewRows: PreviewRow[];
 }
 
@@ -172,20 +180,47 @@ function UrlCell({
   url,
   accent,
   checkKey,
-  checkState,
+  check,
+  expectedName,
   onCheck,
   onPreview,
 }: {
   url: string | null;
   accent: "cyan" | "violet";
   checkKey: string;
-  checkState: RowCheckState | undefined;
-  onCheck: (key: string, url: string) => void;
+  check: RowCheck | undefined;
+  expectedName: string | null;
+  onCheck: (key: string, url: string, expectedName?: string | null) => void;
   onPreview: (url: string) => void;
 }) {
   if (!url) return <span className="text-slate-200 text-xs">—</span>;
   const colorClass = accent === "cyan" ? "text-cyan-600" : "text-violet-600";
   const bgHover = accent === "cyan" ? "hover:bg-cyan-50" : "hover:bg-violet-50";
+  const status = check?.status;
+
+  let btnClass = `${colorClass} ${bgHover}`;
+  let btnTitle = "Сертификатни тасдиқлаш";
+  let btnIcon = <IC.ShieldCheck className="w-3.5 h-3.5" />;
+  if (status === "checking") {
+    btnIcon = <IC.Loader2 className="w-3.5 h-3.5 animate-spin" />;
+  } else if (status === "verified") {
+    btnClass = "text-emerald-600 bg-emerald-50";
+    btnIcon = <IC.CheckCircle2 className="w-3.5 h-3.5" />;
+    btnTitle = `Тасдиқланди${check?.foundName ? ` — ${check.foundName}` : ""}`;
+  } else if (status === "name_mismatch") {
+    btnClass = "text-amber-600 bg-amber-50";
+    btnIcon = <IC.AlertTriangle className="w-3.5 h-3.5" />;
+    btnTitle = `ФИО мос келмайди${check?.foundName ? ` — сертификатда: ${check.foundName}` : ""}`;
+  } else if (status === "not_found") {
+    btnClass = "text-red-600 bg-red-50";
+    btnIcon = <IC.XCircle className="w-3.5 h-3.5" />;
+    btnTitle = "Сертификат топилмади";
+  } else if (status === "dead" || status === "timeout") {
+    btnClass = "text-red-600 bg-red-50";
+    btnIcon = <IC.XCircle className="w-3.5 h-3.5" />;
+    btnTitle = check?.error ? `Хато: ${check.error}` : "Очилмади";
+  }
+
   return (
     <div className="inline-flex items-center gap-1">
       <a
@@ -207,42 +242,35 @@ function UrlCell({
       </button>
       <button
         type="button"
-        onClick={() => onCheck(checkKey, url)}
-        disabled={checkState === "checking"}
-        title="Ссылкани текшириш"
-        className={`p-1 rounded transition-colors cursor-pointer disabled:cursor-wait ${
-          checkState === "alive"
-            ? "text-emerald-600 bg-emerald-50"
-            : checkState === "dead"
-            ? "text-red-600 bg-red-50"
-            : `${colorClass} ${bgHover}`
-        }`}
+        onClick={() => onCheck(checkKey, url, expectedName)}
+        disabled={status === "checking"}
+        title={btnTitle}
+        className={`p-1 rounded transition-colors cursor-pointer disabled:cursor-wait ${btnClass}`}
       >
-        {checkState === "checking" ? (
-          <IC.Loader2 className="w-3.5 h-3.5 animate-spin" />
-        ) : checkState === "alive" ? (
-          <IC.CheckCircle2 className="w-3.5 h-3.5" />
-        ) : checkState === "dead" ? (
-          <IC.XCircle className="w-3.5 h-3.5" />
-        ) : (
-          <IC.ShieldCheck className="w-3.5 h-3.5" />
-        )}
+        {btnIcon}
       </button>
     </div>
   );
 }
 
 function PreviewModal({ url, onClose }: { url: string; onClose: () => void }) {
-  const [blocked, setBlocked] = useState(false);
+  const isCoursera = /coursera\.org/i.test(url);
+  // Coursera serves the recipient name on /account/accomplishments/verify/, not the short /verify/
+  const externalUrl = isCoursera
+    ? url.replace(/coursera\.org\/verify\//i, "coursera.org/account/accomplishments/verify/")
+    : url;
+  // Coursera blocks iframe embedding (X-Frame-Options DENY) — skip iframe entirely for it
+  const [blocked, setBlocked] = useState(isCoursera);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    if (isCoursera) return; // skip iframe entirely for Coursera
     // If iframe doesn't load within 4s, assume X-Frame-Options blocked it
     const timer = setTimeout(() => {
       if (!loaded) setBlocked(true);
     }, 4000);
     return () => clearTimeout(timer);
-  }, [loaded]);
+  }, [loaded, isCoursera]);
 
   return (
     <div
@@ -256,11 +284,11 @@ function PreviewModal({ url, onClose }: { url: string; onClose: () => void }) {
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-slate-50">
           <div className="flex items-center gap-2 min-w-0">
             <IC.Search className="w-4 h-4 text-slate-400 shrink-0" />
-            <p className="text-sm font-mono text-slate-500 truncate">{url}</p>
+            <p className="text-sm font-mono text-slate-500 truncate">{externalUrl}</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <a
-              href={url}
+              href={externalUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
@@ -284,12 +312,18 @@ function PreviewModal({ url, onClose }: { url: string; onClose: () => void }) {
                 <div className="w-14 h-14 mx-auto bg-amber-100 rounded-2xl flex items-center justify-center mb-3">
                   <IC.AlertTriangle className="w-7 h-7 text-amber-500" />
                 </div>
-                <p className="font-semibold text-slate-700">Сайт ичкарига жойлаштириш рухсат бермайди</p>
+                <p className="font-semibold text-slate-700">
+                  {isCoursera
+                    ? "Coursera iframe-да очилмайди"
+                    : "Сайт ичкарига жойлаштириш рухсат бермайди"}
+                </p>
                 <p className="text-sm text-slate-500 mt-1.5 mb-4">
-                  AiStudy ва Coursera хавфсизлик сабабли iframe-да очилмайди. Сертификатни янги вкладкада очинг.
+                  {isCoursera
+                    ? "Coursera хавфсизлик сабабли (X-Frame-Options) ўз сертификатини бошқа сайтларда кўрсатишни рухсат бермайди. Сертификатни янги вкладкада очинг — у ерда олувчи ФИО си кўринади."
+                    : "Сертификатни янги вкладкада очинг."}
                 </p>
                 <a
-                  href={url}
+                  href={externalUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 transition-colors"
@@ -300,13 +334,15 @@ function PreviewModal({ url, onClose }: { url: string; onClose: () => void }) {
               </div>
             </div>
           )}
-          <iframe
-            src={url}
-            className="w-full h-full"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-            referrerPolicy="no-referrer"
-            onLoad={() => setLoaded(true)}
-          />
+          {!isCoursera && (
+            <iframe
+              src={url}
+              className="w-full h-full"
+              sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+              referrerPolicy="no-referrer"
+              onLoad={() => setLoaded(true)}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -337,7 +373,13 @@ function KpiCard({
 const PIE_COLORS = ["#22D3EE", "#10B981", "#A78BFA"];
 
 type LoadStage = "idle" | "uploading" | "parsing" | "checking";
-type RowCheckState = "checking" | "alive" | "dead";
+type VerifyStatus = "verified" | "name_mismatch" | "not_found" | "dead" | "timeout";
+type RowCheckStatus = "checking" | VerifyStatus;
+interface RowCheck {
+  status: RowCheckStatus;
+  foundName?: string | null;
+  error?: string | null;
+}
 
 export function UploadForm() {
   const [dragging, setDragging] = useState(false);
@@ -349,11 +391,16 @@ export function UploadForm() {
   const [showAllOrgs, setShowAllOrgs] = useState(false);
   const [showAllErrors, setShowAllErrors] = useState(false);
   const [showAllPositions, setShowAllPositions] = useState(false);
-  const [rowChecks, setRowChecks] = useState<Record<string, RowCheckState>>({});
+  const [rowChecks, setRowChecks] = useState<Record<string, RowCheck>>({});
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [linkSample, setLinkSample] = useState<LinkSampleSummary | null>(null);
   const [linkSampleStatus, setLinkSampleStatus] = useState<"idle" | "checking" | "error">("idle");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [verifyProgress, setVerifyProgress] = useState<{
+    status: "idle" | "running" | "done";
+    done: number; total: number;
+    verified: number; mismatch: number; dead: number;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleFile(file: File) {
@@ -372,6 +419,7 @@ export function UploadForm() {
     setLinkSample(null);
     setLinkSampleStatus("idle");
     setExpandedGroups(new Set());
+    setVerifyProgress(null);
     setStage("uploading");
     // Pseudo-stage transitions while waiting on server — real progress isn't available
     // mid-request, but the user gets feedback that something is moving.
@@ -425,19 +473,99 @@ export function UploadForm() {
     });
   }
 
-  async function handleRowCheck(key: string, url: string) {
-    setRowChecks((s) => ({ ...s, [key]: "checking" }));
+  async function handleRowCheck(key: string, url: string, expectedName?: string | null) {
+    setRowChecks((s) => ({ ...s, [key]: { status: "checking" } }));
     try {
       const res = await fetch("/api/check-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, expectedName: expectedName ?? null }),
       });
       const data = await res.json();
-      setRowChecks((s) => ({ ...s, [key]: data.alive ? "alive" : "dead" }));
-    } catch {
-      setRowChecks((s) => ({ ...s, [key]: "dead" }));
+      if (!res.ok) {
+        setRowChecks((s) => ({ ...s, [key]: { status: "dead", error: data.error } }));
+        return;
+      }
+      setRowChecks((s) => ({
+        ...s,
+        [key]: {
+          status: data.status as VerifyStatus,
+          foundName: data.foundName ?? null,
+          error: data.error ?? null,
+        },
+      }));
+    } catch (e) {
+      setRowChecks((s) => ({ ...s, [key]: { status: "dead", error: String(e) } }));
     }
+  }
+
+  async function handleVerifyAll() {
+    if (!result || !result.allCertItems.length) return;
+    const items = result.allCertItems;
+    if (items.length > 10000) {
+      toast.error(`Жуда кўп сертификат (${items.length}) — макс. 10000`);
+      return;
+    }
+    setVerifyProgress({ status: "running", done: 0, total: items.length, verified: 0, mismatch: 0, dead: 0 });
+    // mark all as checking initially for visible rows
+    setRowChecks((prev) => {
+      const next = { ...prev };
+      for (const it of items) {
+        next[`${it.rowNumber}:${it.platform === "aistudy" ? "ai" : "co"}`] = { status: "checking" };
+      }
+      return next;
+    });
+
+    const CHUNK = 50;
+    let done = 0, verified = 0, mismatch = 0, dead = 0;
+    for (let i = 0; i < items.length; i += CHUNK) {
+      const chunk = items.slice(i, i + CHUNK);
+      try {
+        const res = await fetch("/api/verify-batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: chunk.map((c) => ({ url: c.url, expectedName: c.expectedName })),
+          }),
+        });
+        const data = await res.json();
+        const results: Array<{ url: string; status: VerifyStatus; foundName: string | null; error: string | null }> =
+          data.results ?? [];
+        setRowChecks((prev) => {
+          const next = { ...prev };
+          for (let j = 0; j < chunk.length; j++) {
+            const it = chunk[j];
+            const r = results[j];
+            const key = `${it.rowNumber}:${it.platform === "aistudy" ? "ai" : "co"}`;
+            if (r) {
+              next[key] = { status: r.status, foundName: r.foundName, error: r.error };
+              if (r.status === "verified") verified++;
+              else if (r.status === "name_mismatch") mismatch++;
+              else dead++;
+            } else {
+              next[key] = { status: "dead", error: "no result" };
+              dead++;
+            }
+          }
+          return next;
+        });
+      } catch {
+        // mark this chunk as dead
+        setRowChecks((prev) => {
+          const next = { ...prev };
+          for (const it of chunk) {
+            const key = `${it.rowNumber}:${it.platform === "aistudy" ? "ai" : "co"}`;
+            next[key] = { status: "dead", error: "network" };
+            dead++;
+          }
+          return next;
+        });
+      }
+      done += chunk.length;
+      setVerifyProgress({ status: "running", done, total: items.length, verified, mismatch, dead });
+    }
+    setVerifyProgress({ status: "done", done, total: items.length, verified, mismatch, dead });
+    toast.success(`Текшириш якунланди: ${verified} ✓ / ${mismatch} ⚠ / ${dead} ✗`);
   }
 
   const shownDistricts = useMemo(
@@ -1206,6 +1334,70 @@ export function UploadForm() {
           {/* ── PREVIEW TAB ───────────────────────────────────────── */}
           {activeTab === "preview" && (
             <div className="space-y-3">
+              {/* Bulk verification card */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 bg-emerald-100 rounded-xl flex items-center justify-center">
+                      <IC.ShieldCheck className="w-5 h-5 text-emerald-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-700">Барча сертификатларни тасдиқлаш</p>
+                      <p className="text-xs text-slate-400">
+                        {result.allCertItems.length.toLocaleString()} та сертификат · ҳар бирини Coursera/AiStudy саҳифасидан текширади
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleVerifyAll}
+                    disabled={verifyProgress?.status === "running" || result.allCertItems.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 disabled:bg-emerald-400 transition-colors cursor-pointer disabled:cursor-wait"
+                  >
+                    {verifyProgress?.status === "running" ? (
+                      <>
+                        <IC.Loader2 className="w-4 h-4 animate-spin" />
+                        Текширилмоқда... ({verifyProgress.done}/{verifyProgress.total})
+                      </>
+                    ) : verifyProgress?.status === "done" ? (
+                      <>
+                        <IC.RefreshCw className="w-4 h-4" />
+                        Қайта текшириш
+                      </>
+                    ) : (
+                      <>
+                        <IC.ShieldCheck className="w-4 h-4" />
+                        Барчасини текшириш
+                      </>
+                    )}
+                  </button>
+                </div>
+                {verifyProgress && (
+                  <>
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 transition-all"
+                        style={{ width: `${(verifyProgress.done / Math.max(1, verifyProgress.total)) * 100}%` }}
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+                      <span className="flex items-center gap-1.5">
+                        <IC.CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        Тасдиқланди: <strong className="text-emerald-700">{verifyProgress.verified}</strong>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <IC.AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                        ФИО мос эмас: <strong className="text-amber-700">{verifyProgress.mismatch}</strong>
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <IC.XCircle className="w-3.5 h-3.5 text-red-500" />
+                        Хато / топилмади: <strong className="text-red-700">{verifyProgress.dead}</strong>
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+
               <p className="text-xs text-slate-500">
                 {groupedPreview.length} та одам · {result.previewRows.length} та сатр
                 <span className="ml-1.5 text-red-400">(қизил — формат хатоси бор)</span>
@@ -1268,7 +1460,8 @@ export function UploadForm() {
                                     url={head.aiUrl}
                                     accent="cyan"
                                     checkKey={`${head.row}:ai`}
-                                    checkState={rowChecks[`${head.row}:ai`]}
+                                    check={rowChecks[`${head.row}:ai`]}
+                                    expectedName={head.name}
                                     onCheck={handleRowCheck}
                                     onPreview={setPreviewUrl}
                                   />
@@ -1284,7 +1477,8 @@ export function UploadForm() {
                                     url={head.coUrl}
                                     accent="violet"
                                     checkKey={`${head.row}:co`}
-                                    checkState={rowChecks[`${head.row}:co`]}
+                                    check={rowChecks[`${head.row}:co`]}
+                                    expectedName={head.name}
                                     onCheck={handleRowCheck}
                                     onPreview={setPreviewUrl}
                                   />
@@ -1304,7 +1498,8 @@ export function UploadForm() {
                                     url={row.aiUrl}
                                     accent="cyan"
                                     checkKey={`${row.row}:ai`}
-                                    checkState={rowChecks[`${row.row}:ai`]}
+                                    check={rowChecks[`${row.row}:ai`]}
+                                    expectedName={row.name}
                                     onCheck={handleRowCheck}
                                     onPreview={setPreviewUrl}
                                   />
@@ -1314,7 +1509,8 @@ export function UploadForm() {
                                     url={row.coUrl}
                                     accent="violet"
                                     checkKey={`${row.row}:co`}
-                                    checkState={rowChecks[`${row.row}:co`]}
+                                    check={rowChecks[`${row.row}:co`]}
+                                    expectedName={row.name}
                                     onCheck={handleRowCheck}
                                     onPreview={setPreviewUrl}
                                   />

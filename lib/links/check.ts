@@ -1,6 +1,23 @@
 import { AISTUDY_RE, COURSERA_RE } from "@/lib/xlsx/parser";
+import { namesMatch } from "@/lib/normalize/name";
 
 export type LinkStatus = "alive" | "dead" | "timeout";
+
+export type VerifyStatus =
+  | "verified"        // page is live and (if expectedName given) name matches
+  | "name_mismatch"   // page live but recipient name doesn't match expected
+  | "not_found"       // 404 / cert ID doesn't exist
+  | "dead"            // network error or HTML present but no name parseable
+  | "timeout";
+
+export interface VerifyResult {
+  url: string;
+  status: VerifyStatus;
+  foundName: string | null;
+  expectedName: string | null;
+  httpStatus: number | null;
+  error: string | null;
+}
 
 export interface LinkResult {
   url: string;
@@ -107,4 +124,163 @@ export async function sampleAndCheck(
 
 export async function checkSingle(url: string): Promise<LinkResult> {
   return checkOne(url, 8000);
+}
+
+// HTML decode a small subset (enough for HTML attribute / text content)
+function decodeHtml(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
+}
+
+// Defensive Coursera HTML name extraction. Coursera changes markup occasionally,
+// so we try multiple patterns and return the first hit.
+function parseCourseraName(html: string): string | null {
+  const patterns: RegExp[] = [
+    // og:title content like: "Ivan Ivanov earned a Coursera certificate ..."
+    /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+?)\s+(?:earned|completed|has earned)/i,
+    /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+?)\s+(?:earned|completed|has earned)/i,
+    // Title tag fallback
+    /<title>([^<|]+?)\s+(?:earned|completed|has earned)/i,
+    // Page heading: "Completed by Иванов И.И."
+    /Completed by\s*<[^>]*>([^<]+?)<\/[^>]+>/i,
+    /Completed by\s+([^<\n]{2,80}?)\s*(?:<|\.|,)/i,
+  ];
+  for (const re of patterns) {
+    const m = html.match(re);
+    if (m && m[1]) {
+      const name = decodeHtml(m[1]).trim();
+      if (name.length >= 2 && name.length <= 120) return name;
+    }
+  }
+  return null;
+}
+
+export async function verifyCoursera(
+  url: string,
+  expectedName: string | null,
+  timeoutMs = 8000
+): Promise<VerifyResult> {
+  const m = url.match(COURSERA_RE);
+  if (!m) {
+    return { url, status: "dead", foundName: null, expectedName, httpStatus: null, error: "URL формат носат." };
+  }
+  const certId = m[1];
+  const verifyUrl = `https://www.coursera.org/account/accomplishments/verify/${certId}`;
+
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(verifyUrl, {
+      method: "GET",
+      signal: ac.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+    if (res.status === 404) {
+      return { url, status: "not_found", foundName: null, expectedName, httpStatus: 404, error: null };
+    }
+    if (res.status < 200 || res.status >= 400) {
+      return {
+        url, status: "dead", foundName: null, expectedName,
+        httpStatus: res.status, error: `HTTP ${res.status}`,
+      };
+    }
+    const html = await res.text();
+    const foundName = parseCourseraName(html);
+    if (!foundName) {
+      // Live page but couldn't extract name — likely "certificate not found" page
+      return {
+        url, status: "not_found", foundName: null, expectedName,
+        httpStatus: res.status, error: "Сертификат маълумоти топилмади",
+      };
+    }
+    if (!expectedName) {
+      return { url, status: "verified", foundName, expectedName: null, httpStatus: res.status, error: null };
+    }
+    const ok = namesMatch(expectedName, foundName);
+    return {
+      url,
+      status: ok ? "verified" : "name_mismatch",
+      foundName,
+      expectedName,
+      httpStatus: res.status,
+      error: ok ? null : "Имя на сертификате не совпадает",
+    };
+  } catch (e) {
+    const err = e as { name?: string; message?: string };
+    if (err?.name === "AbortError" || err?.name === "TimeoutError") {
+      return { url, status: "timeout", foundName: null, expectedName, httpStatus: null, error: "timeout" };
+    }
+    return {
+      url, status: "dead", foundName: null, expectedName,
+      httpStatus: null, error: err?.message ?? "network error",
+    };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// AiStudy: HEAD-only check (we don't yet know the page structure for name parsing)
+export async function verifyAistudy(
+  url: string,
+  expectedName: string | null,
+  timeoutMs = 8000
+): Promise<VerifyResult> {
+  const r = await checkOne(url, timeoutMs);
+  if (r.status === "alive") {
+    return { url, status: "verified", foundName: null, expectedName, httpStatus: r.httpStatus, error: null };
+  }
+  if (r.status === "timeout") {
+    return { url, status: "timeout", foundName: null, expectedName, httpStatus: null, error: "timeout" };
+  }
+  return {
+    url,
+    status: r.httpStatus === 404 ? "not_found" : "dead",
+    foundName: null,
+    expectedName,
+    httpStatus: r.httpStatus,
+    error: r.error,
+  };
+}
+
+export async function verifyOne(
+  url: string,
+  expectedName: string | null,
+  timeoutMs = 8000
+): Promise<VerifyResult> {
+  if (COURSERA_RE.test(url)) return verifyCoursera(url, expectedName, timeoutMs);
+  if (AISTUDY_RE.test(url)) return verifyAistudy(url, expectedName, timeoutMs);
+  return { url, status: "dead", foundName: null, expectedName, httpStatus: null, error: "URL платформаси қўлланилмайди" };
+}
+
+// Concurrent verify-batch helper
+export async function verifyMany(
+  items: { url: string; expectedName: string | null }[],
+  opts: { concurrency?: number; timeoutMs?: number } = {}
+): Promise<VerifyResult[]> {
+  const concurrency = opts.concurrency ?? 4;
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  const results: VerifyResult[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await verifyOne(items[i].url, items[i].expectedName, timeoutMs);
+      }
+    })
+  );
+  return results;
 }

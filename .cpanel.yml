@@ -1,4 +1,9 @@
 ---
 deployment:
   tasks:
-    - echo "Build already included in repo — no npm install needed"
+    - export DEPLOYPATH=/home/xqaiuz/repositories/aileaders/
+    - cd $DEPLOYPATH
+    - rm -rf _next
+    - mkdir -p _next/static
+    - /bin/cp -r .next/standalone/.next/static/. _next/static/
+    - echo "Static assets mirrored to _next/static/ for direct Apache serving"

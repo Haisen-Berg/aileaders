@@ -60,6 +60,12 @@
       "namedRegex": "^/api/check\\-sample(?:/)?$"
     },
     {
+      "page": "/api/verify-batch",
+      "regex": "^/api/verify\\-batch(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/verify\\-batch(?:/)?$"
+    },
+    {
       "page": "/favicon.ico",
       "regex": "^/favicon\\.ico(?:/)?$",
       "routeKeys": {},
