@@ -13,8 +13,11 @@
 # testing
 /coverage
 
-# next.js
-/.next/
+# next.js — exclude everything except the standalone production build
+/.next/*
+!/.next/standalone
+/.next/standalone/*
+!/.next/standalone/**
 /out/
 
 # production

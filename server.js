@@ -1,17 +1,7 @@
-// Custom Next.js server for cPanel Node.js Selector (Phusion Passenger)
-const { createServer } = require("http");
-const { parse } = require("url");
-const next = require("next");
+// Phusion Passenger entry point — delegates to Next.js standalone server
+const path = require("path");
+const standaloneDir = path.join(__dirname, ".next/standalone");
 
-const port = parseInt(process.env.PORT, 10) || 3000;
-const app = next({ dev: false });
-const handle = app.getRequestHandler();
-
-app.prepare().then(() => {
-  createServer((req, res) => {
-    const parsedUrl = parse(req.url, true);
-    handle(req, res, parsedUrl);
-  }).listen(port, () => {
-    console.log(`> AILeaders ready on port ${port}`);
-  });
-});
+// Change working directory so standalone server resolves its own paths correctly
+process.chdir(standaloneDir);
+require(path.join(standaloneDir, "server.js"));
