@@ -3,6 +3,7 @@
   "/_global-error/page": "app/_global-error/page.js",
   "/_not-found/page": "app/_not-found/page.js",
   "/api/check-link/route": "app/api/check-link/route.js",
+  "/api/check-sample/route": "app/api/check-sample/route.js",
   "/api/check/route": "app/api/check/route.js",
   "/favicon.ico/route": "app/favicon.ico/route.js"
 }

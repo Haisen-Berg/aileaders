@@ -6,9 +6,9 @@ import {
   CATEGORY_ORDER,
   type PositionCategory,
 } from "@/lib/normalize/position";
-import { sampleAndCheck, type LinkSampleSummary } from "@/lib/links/check";
+import { type LinkSampleSummary } from "@/lib/links/check";
 
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 export interface DistrictStat {
   district: string;
@@ -69,7 +69,17 @@ export interface CheckResult {
   positionStats: PositionStat[];
   categoryStats: CategoryStat[];
   linkSample: LinkSampleSummary | null;
+  allCertUrls: string[];
   previewRows: PreviewRow[];
+}
+
+interface PersonAcc {
+  district: string | null;
+  organization: string | null;
+  position: string;
+  hasAi: boolean;
+  hasCo: boolean;
+  nonDupCerts: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -101,67 +111,92 @@ export async function POST(req: NextRequest) {
     [...urlHashCounts.entries()].filter(([, n]) => n > 1).map(([h]) => h)
   );
 
+  // First pass: dedup rows by person (fullNameNormalized).
+  // One person can appear in many rows (e.g. multiple Coursera certs across rows) —
+  // they should count as 1 person but their cert counts aggregate across rows.
+  const personMap = new Map<string, PersonAcc>();
   const allErrors: ParsedError[] = [];
-  const districtMap = new Map<string, DistrictStat>();
-  const orgMap = new Map<string, OrgStat>();
-  const positionMap = new Map<string, PositionStat>();
+  const allCertUrls: string[] = [];
   let certsTotal = 0;
-  let totalPeople = 0;
-  let aiStudy = 0;
-  let coursera = 0;
-  let both = 0;
   let dups = 0;
   let skipped = 0;
 
   for (const row of rows) {
     allErrors.push(...row.errors);
-
     if (row.certificates.length === 0) {
       skipped++;
       continue;
     }
+    const nonDupCerts = row.certificates.filter((c) => !duplicateHashes.has(c.urlHash));
+    dups += row.certificates.length - nonDupCerts.length;
+    certsTotal += nonDupCerts.length;
+    for (const c of nonDupCerts) allCertUrls.push(c.url);
 
-    totalPeople++;
+    const personKey = row.fullNameNormalized ?? `__row_${row.rowNumber}`;
     const hasAi = row.certificates.some((c) => c.platform === "aistudy");
     const hasCo = row.certificates.some((c) => c.platform === "coursera");
-    const nonDupCerts = row.certificates.filter((c) => !duplicateHashes.has(c.urlHash));
-    const dupCount = row.certificates.length - nonDupCerts.length;
 
-    dups += dupCount;
-    certsTotal += nonDupCerts.length;
-    if (hasAi) aiStudy++;
-    if (hasCo) coursera++;
-    if (hasAi && hasCo) both++;
+    const existing = personMap.get(personKey);
+    if (existing) {
+      existing.hasAi = existing.hasAi || hasAi;
+      existing.hasCo = existing.hasCo || hasCo;
+      existing.nonDupCerts += nonDupCerts.length;
+    } else {
+      personMap.set(personKey, {
+        district: row.district,
+        organization: row.organization,
+        position: row.positionCanonical,
+        hasAi,
+        hasCo,
+        nonDupCerts: nonDupCerts.length,
+      });
+    }
+  }
 
-    const dist = row.district ?? "Номаълум";
+  // Second pass: aggregate stats from unique persons.
+  const districtMap = new Map<string, DistrictStat>();
+  const orgMap = new Map<string, OrgStat>();
+  const positionMap = new Map<string, PositionStat>();
+  let totalPeople = 0;
+  let aiStudy = 0;
+  let coursera = 0;
+  let both = 0;
+
+  for (const p of personMap.values()) {
+    totalPeople++;
+    if (p.hasAi) aiStudy++;
+    if (p.hasCo) coursera++;
+    if (p.hasAi && p.hasCo) both++;
+
+    const dist = p.district ?? "Номаълум";
     if (!districtMap.has(dist)) {
       districtMap.set(dist, { district: dist, people: 0, certs: 0, aistudy: 0, coursera: 0, both: 0 });
     }
     const ds = districtMap.get(dist)!;
     ds.people++;
-    ds.certs += nonDupCerts.length;
-    if (hasAi) ds.aistudy++;
-    if (hasCo) ds.coursera++;
-    if (hasAi && hasCo) ds.both++;
+    ds.certs += p.nonDupCerts;
+    if (p.hasAi) ds.aistudy++;
+    if (p.hasCo) ds.coursera++;
+    if (p.hasAi && p.hasCo) ds.both++;
 
-    const org = row.organization ?? "Номаълум";
+    const org = p.organization ?? "Номаълум";
     if (!orgMap.has(org)) {
       orgMap.set(org, { organization: org, people: 0, certs: 0, aistudy: 0, coursera: 0, both: 0 });
     }
     const os = orgMap.get(org)!;
     os.people++;
-    os.certs += nonDupCerts.length;
-    if (hasAi) os.aistudy++;
-    if (hasCo) os.coursera++;
-    if (hasAi && hasCo) os.both++;
+    os.certs += p.nonDupCerts;
+    if (p.hasAi) os.aistudy++;
+    if (p.hasCo) os.coursera++;
+    if (p.hasAi && p.hasCo) os.both++;
 
-    const pos = row.positionCanonical ?? "бошқа";
+    const pos = p.position ?? "бошқа";
     if (!positionMap.has(pos)) {
       positionMap.set(pos, { position: pos, people: 0, certs: 0 });
     }
     const ps = positionMap.get(pos)!;
     ps.people++;
-    ps.certs += nonDupCerts.length;
+    ps.certs += p.nonDupCerts;
   }
 
   const districtStats = [...districtMap.values()].sort((a, b) => b.certs - a.certs);
@@ -187,19 +222,7 @@ export async function POST(req: NextRequest) {
     certs: categoryAcc[c].certs,
   }));
 
-  // Sample link liveness check — fire-and-await with budget cap
-  const allUrls: string[] = [];
-  for (const r of rows) for (const c of r.certificates) allUrls.push(c.url);
-  let linkSample: LinkSampleSummary | null = null;
-  try {
-    if (allUrls.length > 0) {
-      linkSample = await sampleAndCheck(allUrls, Math.min(50, allUrls.length));
-    }
-  } catch {
-    linkSample = null;
-  }
-
-  const previewRows: PreviewRow[] = rows.slice(0, 100).map((row) => ({
+  const previewRows: PreviewRow[] = rows.slice(0, 200).map((row) => ({
     row: row.rowNumber,
     name: row.fullName,
     district: row.district,
@@ -226,7 +249,8 @@ export async function POST(req: NextRequest) {
     orgStats,
     positionStats,
     categoryStats,
-    linkSample,
+    linkSample: null,
+    allCertUrls,
     previewRows,
   } satisfies CheckResult);
 }

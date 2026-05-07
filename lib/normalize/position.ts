@@ -17,6 +17,12 @@ const KEYWORDS: [string[], CanonicalPosition][] = [
   [["ходим", "xodim", "hodim", "сотрудник", "работник", "员工", "ishchi", "mutaxassis", "specialist", "менежер", "директор", "rahbar", "boshqaruvchi", "mudur", "inspektor"], "ходим"],
 ];
 
+// Strip apostrophe-like characters so "O'qituvchi" (smart quote U+2019),
+// "Oʻqituvchi" (modifier letter U+02BB), "O'qituvchi" (ASCII), and "Oqituvchi"
+// (no apostrophe at all) all match the same keyword.
+const APOSTROPHE_RE = /['ʻʼ‘’`]/g;
+function stripApos(s: string): string { return s.replace(APOSTROPHE_RE, ""); }
+
 // Cache canonicalization results — for files with 50k+ rows, repeated raw strings are common
 const _canonCache = new Map<string, CanonicalPosition>();
 
@@ -26,9 +32,10 @@ export function canonicalizePosition(raw: string | null | undefined): CanonicalP
   const cached = _canonCache.get(lower);
   if (cached) return cached;
 
+  const stripped = stripApos(lower);
   let result: CanonicalPosition = "бошқа";
   for (const [keywords, canon] of KEYWORDS) {
-    if (keywords.some((kw) => lower.includes(kw))) {
+    if (keywords.some((kw) => stripped.includes(stripApos(kw)))) {
       result = canon;
       break;
     }

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useMemo, useEffect } from "react";
+import { useState, useRef, useMemo, useEffect, Fragment } from "react";
+import { normalizeName } from "@/lib/normalize/name";
 
 // Inline SVG icons — no lucide-react dependency
 const IC = {
@@ -121,7 +122,21 @@ interface CheckResult {
   positionStats: PositionStat[];
   categoryStats: CategoryStat[];
   linkSample: LinkSampleSummary | null;
+  allCertUrls: string[];
   previewRows: PreviewRow[];
+}
+
+// Deterministic LCG sample so the same file produces the same 50 URLs each click.
+function deterministicSample<T>(arr: T[], n: number, seed = 1): T[] {
+  if (arr.length <= n) return arr.slice();
+  const idx = arr.map((_, i) => i);
+  let s = seed >>> 0;
+  for (let i = idx.length - 1; i > 0; i--) {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    const j = s % (i + 1);
+    [idx[i], idx[j]] = [idx[j], idx[i]];
+  }
+  return idx.slice(0, n).map((i) => arr[i]);
 }
 
 const CATEGORY_META: Record<
@@ -336,6 +351,9 @@ export function UploadForm() {
   const [showAllPositions, setShowAllPositions] = useState(false);
   const [rowChecks, setRowChecks] = useState<Record<string, RowCheckState>>({});
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [linkSample, setLinkSample] = useState<LinkSampleSummary | null>(null);
+  const [linkSampleStatus, setLinkSampleStatus] = useState<"idle" | "checking" | "error">("idle");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleFile(file: File) {
@@ -351,6 +369,9 @@ export function UploadForm() {
     setShowAllErrors(false);
     setShowAllPositions(false);
     setRowChecks({});
+    setLinkSample(null);
+    setLinkSampleStatus("idle");
+    setExpandedGroups(new Set());
     setStage("uploading");
     // Pseudo-stage transitions while waiting on server — real progress isn't available
     // mid-request, but the user gets feedback that something is moving.
@@ -372,6 +393,36 @@ export function UploadForm() {
       setStage("idle");
       setLoading(false);
     }
+  }
+
+  async function handleSampleCheck() {
+    if (!result || result.allCertUrls.length === 0) return;
+    setLinkSampleStatus("checking");
+    setLinkSample(null);
+    try {
+      const sample = deterministicSample(result.allCertUrls, Math.min(50, result.allCertUrls.length));
+      const res = await fetch("/api/check-sample", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls: sample }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Текширишда хато");
+      setLinkSample(data);
+      setLinkSampleStatus("idle");
+    } catch (e) {
+      setLinkSampleStatus("error");
+      toast.error(String(e));
+    }
+  }
+
+  function toggleGroup(key: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   async function handleRowCheck(key: string, url: string) {
@@ -423,9 +474,21 @@ export function UploadForm() {
   );
 
   const linkSamplePct = useMemo(() => {
-    if (!result?.linkSample || result.linkSample.total === 0) return null;
-    return Math.round((result.linkSample.alive / result.linkSample.total) * 100);
-  }, [result?.linkSample]);
+    if (!linkSample || linkSample.total === 0) return null;
+    return Math.round((linkSample.alive / linkSample.total) * 100);
+  }, [linkSample]);
+
+  // Group preview rows by FIO. Same person across multiple rows = one expandable group.
+  const groupedPreview = useMemo(() => {
+    if (!result) return [];
+    const groups = new Map<string, { key: string; rows: PreviewRow[] }>();
+    for (const r of result.previewRows) {
+      const k = r.name && r.name.trim() ? normalizeName(r.name) : `__r${r.row}`;
+      if (!groups.has(k)) groups.set(k, { key: k, rows: [] });
+      groups.get(k)!.rows.push(r);
+    }
+    return [...groups.values()];
+  }, [result]);
 
   // Lock body scroll while iframe modal is open
   useEffect(() => {
@@ -724,8 +787,8 @@ export function UploadForm() {
                 </div>
               )}
 
-              {/* ── LINK SAMPLE ─────────────────────────────────────── */}
-              {result.linkSample && result.linkSample.total > 0 && (
+              {/* ── LINK SAMPLE (manual) ────────────────────────────── */}
+              {result.allCertUrls.length > 0 && (
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2.5">
@@ -735,18 +798,18 @@ export function UploadForm() {
                       <div>
                         <p className="text-sm font-semibold text-slate-700">Ссылкаларнинг ҳолати</p>
                         <p className="text-xs text-slate-400">
-                          {result.linkSample.total} та тасодифий ссылка текширилди
+                          {linkSample
+                            ? `${linkSample.total} та тасодифий ссылка текширилди`
+                            : `Жами ${result.allCertUrls.length.toLocaleString()} та сертификат — 50 тасини тасодифий текширишингиз мумкин`}
                         </p>
                       </div>
                     </div>
-                    {linkSamplePct !== null && (
+                    {linkSample && linkSamplePct !== null ? (
                       <div className="text-right">
                         <p
                           className={`text-2xl font-bold ${
-                            linkSamplePct >= 90
-                              ? "text-emerald-600"
-                              : linkSamplePct >= 70
-                              ? "text-amber-600"
+                            linkSamplePct >= 90 ? "text-emerald-600"
+                              : linkSamplePct >= 70 ? "text-amber-600"
                               : "text-red-600"
                           }`}
                         >
@@ -754,55 +817,81 @@ export function UploadForm() {
                         </p>
                         <p className="text-[10px] text-slate-400 uppercase tracking-wide">тирик</p>
                       </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleSampleCheck}
+                        disabled={linkSampleStatus === "checking"}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:bg-indigo-400 transition-colors cursor-pointer disabled:cursor-wait shrink-0"
+                      >
+                        {linkSampleStatus === "checking" ? (
+                          <>
+                            <IC.Loader2 className="w-4 h-4 animate-spin" />
+                            Текширилмоқда...
+                          </>
+                        ) : (
+                          <>
+                            <IC.ShieldCheck className="w-4 h-4" />
+                            Ссылкаларни текшириш
+                          </>
+                        )}
+                      </button>
                     )}
                   </div>
-                  <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 mb-3">
-                    {result.linkSample.alive > 0 && (
-                      <div
-                        className="bg-emerald-500"
-                        style={{ width: `${(result.linkSample.alive / result.linkSample.total) * 100}%` }}
-                      />
-                    )}
-                    {result.linkSample.timeouts > 0 && (
-                      <div
-                        className="bg-amber-400"
-                        style={{ width: `${(result.linkSample.timeouts / result.linkSample.total) * 100}%` }}
-                      />
-                    )}
-                    {result.linkSample.dead > 0 && (
-                      <div
-                        className="bg-red-500"
-                        style={{ width: `${(result.linkSample.dead / result.linkSample.total) * 100}%` }}
-                      />
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-3 text-xs text-slate-500">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-                      Тирик: <strong className="text-slate-700">{result.linkSample.alive}</strong>
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
-                      Таймаут: <strong className="text-slate-700">{result.linkSample.timeouts}</strong>
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
-                      Битик: <strong className="text-slate-700">{result.linkSample.dead}</strong>
-                    </span>
-                  </div>
-                  {result.linkSample.deadUrls.length > 0 && (
-                    <details className="mt-4 group">
-                      <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-700 select-none">
-                        Муаммоли ссылкаларни кўрсатиш ({result.linkSample.deadUrls.length})
-                      </summary>
-                      <div className="mt-2 space-y-1">
-                        {result.linkSample.deadUrls.map((u, i) => (
-                          <div key={i} className="text-[11px] font-mono text-red-600 bg-red-50 rounded px-2 py-1 break-all">
-                            {u}
-                          </div>
-                        ))}
+
+                  {linkSample && (
+                    <>
+                      <div className="flex h-2 rounded-full overflow-hidden bg-slate-100 mb-3">
+                        {linkSample.alive > 0 && (
+                          <div className="bg-emerald-500" style={{ width: `${(linkSample.alive / linkSample.total) * 100}%` }} />
+                        )}
+                        {linkSample.timeouts > 0 && (
+                          <div className="bg-amber-400" style={{ width: `${(linkSample.timeouts / linkSample.total) * 100}%` }} />
+                        )}
+                        {linkSample.dead > 0 && (
+                          <div className="bg-red-500" style={{ width: `${(linkSample.dead / linkSample.total) * 100}%` }} />
+                        )}
                       </div>
-                    </details>
+                      <div className="flex items-center justify-between flex-wrap gap-3">
+                        <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                            Тирик: <strong className="text-slate-700">{linkSample.alive}</strong>
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+                            Таймаут: <strong className="text-slate-700">{linkSample.timeouts}</strong>
+                          </span>
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />
+                            Битик: <strong className="text-slate-700">{linkSample.dead}</strong>
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSampleCheck}
+                          disabled={linkSampleStatus === "checking"}
+                          className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 px-2.5 py-1 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                        >
+                          <IC.RefreshCw className="w-3.5 h-3.5" />
+                          Қайта текшириш
+                        </button>
+                      </div>
+                      {linkSample.deadUrls.length > 0 && (
+                        <details className="mt-4">
+                          <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-700 select-none">
+                            Муаммоли ссылкаларни кўрсатиш ({linkSample.deadUrls.length})
+                          </summary>
+                          <div className="mt-2 space-y-1">
+                            {linkSample.deadUrls.map((u, i) => (
+                              <div key={i} className="text-[11px] font-mono text-red-600 bg-red-50 rounded px-2 py-1 break-all">
+                                {u}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -1118,8 +1207,9 @@ export function UploadForm() {
           {activeTab === "preview" && (
             <div className="space-y-3">
               <p className="text-xs text-slate-500">
-                Биринчи {result.previewRows.length} та сатр
+                {groupedPreview.length} та одам · {result.previewRows.length} та сатр
                 <span className="ml-1.5 text-red-400">(қизил — формат хатоси бор)</span>
+                <span className="ml-1.5 text-blue-400">(кўп серт. — кенгайтириш ▾)</span>
               </p>
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">
@@ -1134,41 +1224,106 @@ export function UploadForm() {
                       </tr>
                     </thead>
                     <tbody>
-                      {result.previewRows.map((row, i) => (
-                        <tr
-                          key={row.row}
-                          className={`border-b border-slate-100 ${
-                            row.hasErrors ? "bg-red-50" : i % 2 === 0 ? "bg-white" : "bg-slate-50/40"
-                          }`}
-                        >
-                          <td className="px-3 py-2.5 text-xs text-slate-300 font-mono">{row.row}</td>
-                          <td className="px-3 py-2.5 font-medium text-slate-800 max-w-[160px] truncate">
-                            {row.name ?? <span className="text-slate-300 italic text-xs">бўш</span>}
-                          </td>
-                          <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap">{row.district ?? "—"}</td>
-                          <td className="px-3 py-2.5 text-xs text-slate-400 max-w-[140px] truncate">{row.organization ?? "—"}</td>
-                          <td className="px-3 py-2.5">
-                            <UrlCell
-                              url={row.aiUrl}
-                              accent="cyan"
-                              checkKey={`${row.row}:ai`}
-                              checkState={rowChecks[`${row.row}:ai`]}
-                              onCheck={handleRowCheck}
-                              onPreview={setPreviewUrl}
-                            />
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <UrlCell
-                              url={row.coUrl}
-                              accent="violet"
-                              checkKey={`${row.row}:co`}
-                              checkState={rowChecks[`${row.row}:co`]}
-                              onCheck={handleRowCheck}
-                              onPreview={setPreviewUrl}
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                      {groupedPreview.map((group, gi) => {
+                        const head = group.rows[0];
+                        const count = group.rows.length;
+                        const isMulti = count > 1;
+                        const expanded = expandedGroups.has(group.key);
+                        const stripe = gi % 2 === 0 ? "bg-white" : "bg-slate-50/40";
+                        const errorBg = head.hasErrors ? "bg-red-50" : stripe;
+                        return (
+                          <Fragment key={group.key}>
+                            <tr
+                              className={`border-b border-slate-100 ${errorBg} ${isMulti ? "cursor-pointer hover:bg-blue-50/40" : ""}`}
+                              onClick={isMulti ? () => toggleGroup(group.key) : undefined}
+                            >
+                              <td className="px-3 py-2.5 text-xs text-slate-300 font-mono whitespace-nowrap">
+                                {isMulti ? (
+                                  <span className="inline-flex items-center gap-1 text-blue-600 font-semibold">
+                                    {expanded ? "▾" : "▸"} {head.row}
+                                  </span>
+                                ) : head.row}
+                              </td>
+                              <td className="px-3 py-2.5 font-medium text-slate-800 max-w-[200px]">
+                                <div className="flex items-center gap-2">
+                                  <span className="truncate">
+                                    {head.name ?? <span className="text-slate-300 italic text-xs">бўш</span>}
+                                  </span>
+                                  {isMulti && (
+                                    <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-blue-100 text-blue-700">
+                                      {count} серт.
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2.5 text-xs text-slate-500 whitespace-nowrap">{head.district ?? "—"}</td>
+                              <td className="px-3 py-2.5 text-xs text-slate-400 max-w-[140px] truncate">{head.organization ?? "—"}</td>
+                              <td className="px-3 py-2.5">
+                                {isMulti ? (
+                                  <span className="text-[11px] text-slate-400">
+                                    {group.rows.filter((r) => r.aiUrl).length} та
+                                  </span>
+                                ) : (
+                                  <UrlCell
+                                    url={head.aiUrl}
+                                    accent="cyan"
+                                    checkKey={`${head.row}:ai`}
+                                    checkState={rowChecks[`${head.row}:ai`]}
+                                    onCheck={handleRowCheck}
+                                    onPreview={setPreviewUrl}
+                                  />
+                                )}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                {isMulti ? (
+                                  <span className="text-[11px] text-slate-400">
+                                    {group.rows.filter((r) => r.coUrl).length} та
+                                  </span>
+                                ) : (
+                                  <UrlCell
+                                    url={head.coUrl}
+                                    accent="violet"
+                                    checkKey={`${head.row}:co`}
+                                    checkState={rowChecks[`${head.row}:co`]}
+                                    onCheck={handleRowCheck}
+                                    onPreview={setPreviewUrl}
+                                  />
+                                )}
+                              </td>
+                            </tr>
+                            {isMulti && expanded && group.rows.map((row, ri) => (
+                              <tr key={`${group.key}-${ri}`} className="border-b border-slate-100 bg-blue-50/20">
+                                <td className="px-3 py-2 text-[11px] text-slate-400 font-mono pl-8 whitespace-nowrap">
+                                  ↳ {row.row}
+                                </td>
+                                <td colSpan={3} className="px-3 py-2 text-[11px] text-slate-400">
+                                  Сертификат #{ri + 1}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <UrlCell
+                                    url={row.aiUrl}
+                                    accent="cyan"
+                                    checkKey={`${row.row}:ai`}
+                                    checkState={rowChecks[`${row.row}:ai`]}
+                                    onCheck={handleRowCheck}
+                                    onPreview={setPreviewUrl}
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <UrlCell
+                                    url={row.coUrl}
+                                    accent="violet"
+                                    checkKey={`${row.row}:co`}
+                                    checkState={rowChecks[`${row.row}:co`]}
+                                    onCheck={handleRowCheck}
+                                    onPreview={setPreviewUrl}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

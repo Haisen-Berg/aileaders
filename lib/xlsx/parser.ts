@@ -48,6 +48,16 @@ function cellStr(row: ExcelJS.Row, col: number): string | null {
   return String(v).trim() || null;
 }
 
+// Excel cells often store URLs without protocol (e.g. "coursera.org/verify/X").
+// Without the prefix, browsers treat them as relative paths and `fetch()` errors with
+// "Invalid URL". Force-prepend https:// when missing.
+function normalizeUrl(s: string): string {
+  const trimmed = s.trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return "https://" + trimmed.replace(/^\/+/, "");
+}
+
 // For URL columns: prefer hyperlink target over display text.
 // xlsx files often store the real URL as cell.value.hyperlink while the visible text
 // is "Click here" or a course title — relying on text alone misses valid URLs.
@@ -55,13 +65,17 @@ function cellUrl(row: ExcelJS.Row, col: number): string | null {
   const cell = row.getCell(col);
   const v = cell.value;
   if (v === null || v === undefined) return null;
-  if (typeof v === "string") return v.trim() || null;
+  if (typeof v === "string") {
+    const t = v.trim();
+    return t ? normalizeUrl(t) : null;
+  }
   if (typeof v === "object") {
     const obj = v as { text?: unknown; hyperlink?: unknown };
-    if (typeof obj.hyperlink === "string" && obj.hyperlink.trim()) return obj.hyperlink.trim();
-    if (typeof obj.text === "string" && obj.text.trim()) return obj.text.trim();
+    if (typeof obj.hyperlink === "string" && obj.hyperlink.trim()) return normalizeUrl(obj.hyperlink);
+    if (typeof obj.text === "string" && obj.text.trim()) return normalizeUrl(obj.text);
   }
-  return cellStr(row, col);
+  const fallback = cellStr(row, col);
+  return fallback ? normalizeUrl(fallback) : null;
 }
 
 function cellDate(row: ExcelJS.Row, col: number): Date | null {

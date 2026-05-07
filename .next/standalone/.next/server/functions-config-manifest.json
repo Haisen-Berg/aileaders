@@ -15,10 +15,13 @@
       ]
     },
     "/api/check": {
-      "maxDuration": 120
+      "maxDuration": 60
     },
     "/api/check-link": {
       "maxDuration": 15
+    },
+    "/api/check-sample": {
+      "maxDuration": 60
     }
   }
 }
