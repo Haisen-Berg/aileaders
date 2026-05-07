@@ -3,5 +3,6 @@ deployment:
   tasks:
     - export NVM_DIR="$HOME/.nvm"
     - '[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"'
-    - npm install
+    - npm install --no-cache --legacy-peer-deps
     - npm run build
+    - rm -rf ~/.npm
