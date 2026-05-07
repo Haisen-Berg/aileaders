@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseXlsx, ParsedRow } from "@/lib/xlsx/parser";
+import { parseXlsx, ParsedRow, ParsedError } from "@/lib/xlsx/parser";
+import {
+  POSITION_TO_CATEGORY,
+  CATEGORY_LABELS,
+  CATEGORY_ORDER,
+  type PositionCategory,
+} from "@/lib/normalize/position";
+import { sampleAndCheck, type LinkSampleSummary } from "@/lib/links/check";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export interface DistrictStat {
   district: string;
@@ -12,8 +19,24 @@ export interface DistrictStat {
   both: number;
 }
 
+export interface OrgStat {
+  organization: string;
+  people: number;
+  certs: number;
+  aistudy: number;
+  coursera: number;
+  both: number;
+}
+
 export interface PositionStat {
   position: string;
+  people: number;
+  certs: number;
+}
+
+export interface CategoryStat {
+  category: PositionCategory;
+  label: string;
   people: number;
   certs: number;
 }
@@ -40,9 +63,12 @@ export interface CheckResult {
   coursera: number;
   both: number;
   duplicatesInFile: number;
-  errors: string[];
+  errors: ParsedError[];
   districtStats: DistrictStat[];
+  orgStats: OrgStat[];
   positionStats: PositionStat[];
+  categoryStats: CategoryStat[];
+  linkSample: LinkSampleSummary | null;
   previewRows: PreviewRow[];
 }
 
@@ -75,8 +101,9 @@ export async function POST(req: NextRequest) {
     [...urlHashCounts.entries()].filter(([, n]) => n > 1).map(([h]) => h)
   );
 
-  const allErrors: string[] = [];
+  const allErrors: ParsedError[] = [];
   const districtMap = new Map<string, DistrictStat>();
+  const orgMap = new Map<string, OrgStat>();
   const positionMap = new Map<string, PositionStat>();
   let certsTotal = 0;
   let totalPeople = 0;
@@ -117,6 +144,17 @@ export async function POST(req: NextRequest) {
     if (hasCo) ds.coursera++;
     if (hasAi && hasCo) ds.both++;
 
+    const org = row.organization ?? "Номаълум";
+    if (!orgMap.has(org)) {
+      orgMap.set(org, { organization: org, people: 0, certs: 0, aistudy: 0, coursera: 0, both: 0 });
+    }
+    const os = orgMap.get(org)!;
+    os.people++;
+    os.certs += nonDupCerts.length;
+    if (hasAi) os.aistudy++;
+    if (hasCo) os.coursera++;
+    if (hasAi && hasCo) os.both++;
+
     const pos = row.positionCanonical ?? "бошқа";
     if (!positionMap.has(pos)) {
       positionMap.set(pos, { position: pos, people: 0, certs: 0 });
@@ -127,7 +165,39 @@ export async function POST(req: NextRequest) {
   }
 
   const districtStats = [...districtMap.values()].sort((a, b) => b.certs - a.certs);
+  const orgStats = [...orgMap.values()].sort((a, b) => b.certs - a.certs);
   const positionStats = [...positionMap.values()].sort((a, b) => b.people - a.people);
+
+  // Roll up canonical positions into 4 high-level categories
+  const categoryAcc: Record<PositionCategory, { people: number; certs: number }> = {
+    teachers: { people: 0, certs: 0 },
+    learners: { people: 0, certs: 0 },
+    employees: { people: 0, certs: 0 },
+    other: { people: 0, certs: 0 },
+  };
+  for (const ps of positionStats) {
+    const cat = POSITION_TO_CATEGORY[ps.position as keyof typeof POSITION_TO_CATEGORY] ?? "other";
+    categoryAcc[cat].people += ps.people;
+    categoryAcc[cat].certs += ps.certs;
+  }
+  const categoryStats: CategoryStat[] = CATEGORY_ORDER.map((c) => ({
+    category: c,
+    label: CATEGORY_LABELS[c],
+    people: categoryAcc[c].people,
+    certs: categoryAcc[c].certs,
+  }));
+
+  // Sample link liveness check — fire-and-await with budget cap
+  const allUrls: string[] = [];
+  for (const r of rows) for (const c of r.certificates) allUrls.push(c.url);
+  let linkSample: LinkSampleSummary | null = null;
+  try {
+    if (allUrls.length > 0) {
+      linkSample = await sampleAndCheck(allUrls, Math.min(50, allUrls.length));
+    }
+  } catch {
+    linkSample = null;
+  }
 
   const previewRows: PreviewRow[] = rows.slice(0, 100).map((row) => ({
     row: row.rowNumber,
@@ -153,7 +223,10 @@ export async function POST(req: NextRequest) {
     duplicatesInFile: dups,
     errors: allErrors.slice(0, 100),
     districtStats,
+    orgStats,
     positionStats,
+    categoryStats,
+    linkSample,
     previewRows,
   } satisfies CheckResult);
 }

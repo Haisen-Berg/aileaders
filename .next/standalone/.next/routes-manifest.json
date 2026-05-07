@@ -48,6 +48,12 @@
       "namedRegex": "^/api/check(?:/)?$"
     },
     {
+      "page": "/api/check-link",
+      "regex": "^/api/check\\-link(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/check\\-link(?:/)?$"
+    },
+    {
       "page": "/favicon.ico",
       "regex": "^/favicon\\.ico(?:/)?$",
       "routeKeys": {},

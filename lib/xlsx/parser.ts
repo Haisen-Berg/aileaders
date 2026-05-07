@@ -3,6 +3,17 @@ import crypto from "crypto";
 import { normalizeName } from "@/lib/normalize/name";
 import { canonicalizePosition } from "@/lib/normalize/position";
 
+export interface ParsedError {
+  row: number;
+  name: string | null;
+  district: string | null;
+  organization: string | null;
+  position: string;
+  platform: "aistudy" | "coursera";
+  url: string;
+  reason: string;
+}
+
 export interface ParsedRow {
   rowNumber: number;
   district: string | null;
@@ -12,7 +23,7 @@ export interface ParsedRow {
   positionRaw: string | null;
   positionCanonical: string;
   certificates: ParsedCert[];
-  errors: string[];
+  errors: ParsedError[];
 }
 
 export interface ParsedCert {
@@ -23,8 +34,8 @@ export interface ParsedCert {
   urlHash: string;
 }
 
-const AISTUDY_RE = /omp\.aistudy\.uz\/certificate\?id=([0-9a-f-]{36})/i;
-const COURSERA_RE = /coursera\.org\/verify\/([A-Z0-9]+)/i;
+export const AISTUDY_RE = /omp\.aistudy\.uz\/certificate\?id=([0-9a-f-]{36})/i;
+export const COURSERA_RE = /coursera\.org\/verify\/([A-Z0-9]+)/i;
 
 function cellStr(row: ExcelJS.Row, col: number): string | null {
   const cell = row.getCell(col);
@@ -35,6 +46,22 @@ function cellStr(row: ExcelJS.Row, col: number): string | null {
   if (v instanceof Date) return v.toISOString();
   if (typeof v === "object" && "text" in v) return String((v as { text: string }).text).trim() || null;
   return String(v).trim() || null;
+}
+
+// For URL columns: prefer hyperlink target over display text.
+// xlsx files often store the real URL as cell.value.hyperlink while the visible text
+// is "Click here" or a course title — relying on text alone misses valid URLs.
+function cellUrl(row: ExcelJS.Row, col: number): string | null {
+  const cell = row.getCell(col);
+  const v = cell.value;
+  if (v === null || v === undefined) return null;
+  if (typeof v === "string") return v.trim() || null;
+  if (typeof v === "object") {
+    const obj = v as { text?: unknown; hyperlink?: unknown };
+    if (typeof obj.hyperlink === "string" && obj.hyperlink.trim()) return obj.hyperlink.trim();
+    if (typeof obj.text === "string" && obj.text.trim()) return obj.text.trim();
+  }
+  return cellStr(row, col);
 }
 
 function cellDate(row: ExcelJS.Row, col: number): Date | null {
@@ -90,24 +117,33 @@ export async function parseXlsx(buffer: ArrayBuffer): Promise<ParsedRow[]> {
 
     const aiCourse = cellStr(row, 6);
     const aiDate = cellDate(row, 7);
-    const aiUrl = cellStr(row, 8);
+    const aiUrl = cellUrl(row, 8);
 
     const coCourse = cellStr(row, 9);
     const coDate = cellDate(row, 10);
-    const coUrl = cellStr(row, 11);
+    const coUrl = cellUrl(row, 11);
 
     // Skip completely empty rows
     if (!district && !organization && !fullName && !aiUrl && !coUrl) return;
 
-    const errors: string[] = [];
+    const errors: ParsedError[] = [];
     const certs: ParsedCert[] = [];
+    const positionCanonical = canonicalizePosition(positionRaw);
 
     const aiCert = parseCert(aiUrl, aiCourse, aiDate);
-    if (aiUrl && !aiCert) errors.push(`Строка ${rowNumber}: неверный формат AiStudy ссылки: ${aiUrl}`);
+    if (aiUrl && !aiCert) errors.push({
+      row: rowNumber, name: fullName, district, organization,
+      position: positionCanonical, platform: "aistudy", url: aiUrl,
+      reason: "AiStudy ссылкасининг форматы нотўғри",
+    });
     if (aiCert) certs.push(aiCert);
 
     const coCert = parseCert(coUrl, coCourse, coDate);
-    if (coUrl && !coCert) errors.push(`Строка ${rowNumber}: неверный формат Coursera ссылки: ${coUrl}`);
+    if (coUrl && !coCert) errors.push({
+      row: rowNumber, name: fullName, district, organization,
+      position: positionCanonical, platform: "coursera", url: coUrl,
+      reason: "Coursera ссылкасининг форматы нотўғри",
+    });
     if (coCert) certs.push(coCert);
 
     rows.push({
@@ -117,7 +153,7 @@ export async function parseXlsx(buffer: ArrayBuffer): Promise<ParsedRow[]> {
       fullName,
       fullNameNormalized: fullName ? normalizeName(fullName) : null,
       positionRaw,
-      positionCanonical: canonicalizePosition(positionRaw),
+      positionCanonical,
       certificates: certs,
       errors,
     });
