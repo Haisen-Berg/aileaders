@@ -425,19 +425,24 @@ export function UploadForm() {
     // mid-request, but the user gets feedback that something is moving.
     const t1 = setTimeout(() => setStage("parsing"), 600);
     const t2 = setTimeout(() => setStage("checking"), 2500);
+    // Hard 60s ceiling so a hung request can't leave the dropzone disabled forever.
+    const ac = new AbortController();
+    const tAbort = setTimeout(() => ac.abort(), 60_000);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/check", { method: "POST", body: fd });
+      const res = await fetch("/api/check", { method: "POST", body: fd, signal: ac.signal });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Хато юз берди");
       setResult(data);
       toast.success(`${data.rowsTotal.toLocaleString()} та сатр таҳлил қилинди`);
     } catch (e) {
-      toast.error(String(e));
+      const err = e as { name?: string };
+      toast.error(err?.name === "AbortError" ? "Сўров вақти тугади" : String(e));
     } finally {
       clearTimeout(t1);
       clearTimeout(t2);
+      clearTimeout(tAbort);
       setStage("idle");
       setLoading(false);
     }
@@ -671,11 +676,10 @@ export function UploadForm() {
 
       {/* ── DROP ZONE ─────────────────────────────────────────────── */}
       {!result && (
-        <div
-          role="button"
-          tabIndex={0}
+        <label
+          htmlFor="upload-form-file-input"
           aria-label="Файл юклаш"
-          className={`relative rounded-3xl border-2 border-dashed cursor-pointer transition-all duration-200 select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+          className={`relative block rounded-3xl border-2 border-dashed cursor-pointer transition-all duration-200 select-none focus-within:outline-none focus-within:ring-2 focus-within:ring-blue-500 ${
             dragging
               ? "border-blue-400 bg-blue-50 shadow-lg shadow-blue-100"
               : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-md"
@@ -688,8 +692,6 @@ export function UploadForm() {
             const file = e.dataTransfer.files[0];
             if (file) handleFile(file);
           }}
-          onClick={() => !loading && inputRef.current?.click()}
-          onKeyDown={(e) => e.key === "Enter" && !loading && inputRef.current?.click()}
         >
           <div className="py-20 px-8 text-center">
             {loading ? (
@@ -747,6 +749,7 @@ export function UploadForm() {
           </div>
           <input
             ref={inputRef}
+            id="upload-form-file-input"
             type="file"
             accept=".xlsx"
             className="hidden"
@@ -756,7 +759,7 @@ export function UploadForm() {
               e.target.value = "";
             }}
           />
-        </div>
+        </label>
       )}
 
       {/* ── RESULTS ───────────────────────────────────────────────── */}

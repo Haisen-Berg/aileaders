@@ -35,7 +35,7 @@ export interface ParsedCert {
 }
 
 export const AISTUDY_RE = /omp\.aistudy\.uz\/certificate\?id=([0-9a-f-]{36})/i;
-export const COURSERA_RE = /coursera\.org\/verify\/([A-Z0-9]+)/i;
+export const COURSERA_RE = /coursera\.org\/(?:account\/accomplishments\/)?verify\/([A-Z0-9]+)/i;
 
 function cellStr(row: ExcelJS.Row, col: number): string | null {
   const cell = row.getCell(col);

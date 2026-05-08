@@ -65,20 +65,60 @@ function normalizeForMatch(name: string): string {
     .join(" ");
 }
 
-function tokenSetRatio(a: string, b: string): number {
-  const setA = new Set(a.split(" "));
-  const setB = new Set(b.split(" "));
-  const intersection = [...setA].filter((t) => setB.has(t));
-  if (setA.size === 0 && setB.size === 0) return 1;
-  return (2 * intersection.length) / (setA.size + setB.size);
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = new Array(b.length + 1);
+  let curr = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
 }
 
+function tokenSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  const max = Math.max(a.length, b.length);
+  return 1 - levenshtein(a, b) / max;
+}
+
+// Per-token fuzzy match. Each token in the shorter name must find a distinct
+// token in the longer name with similarity ≥ 0.8 (~1 char diff per 5–7 chars).
+// Tolerates: missing patronymic (FI vs FIO), Cyrillic↔Latin transliteration
+// drift (Sultonov/Sultanov, Karimov/Karimof), apostrophe/spacing differences.
 export function namesMatch(dbName: string, certName: string): boolean {
   if (!dbName || !certName) return false;
-  const a = normalizeForMatch(dbName);
-  const b = normalizeForMatch(certName);
-  if (a === b) return true;
-  return tokenSetRatio(a, b) >= 0.85;
+  const A = normalizeForMatch(dbName).split(" ").filter(Boolean);
+  const B = normalizeForMatch(certName).split(" ").filter(Boolean);
+  if (!A.length || !B.length) return false;
+
+  const [small, big] = A.length <= B.length ? [A, B] : [B, A];
+  const used = new Set<number>();
+  let matched = 0;
+  for (const t of small) {
+    let bestIdx = -1;
+    let bestSim = 0;
+    for (let i = 0; i < big.length; i++) {
+      if (used.has(i)) continue;
+      const sim = tokenSimilarity(t, big[i]);
+      if (sim > bestSim) {
+        bestSim = sim;
+        bestIdx = i;
+      }
+    }
+    if (bestSim >= 0.8 && bestIdx >= 0) {
+      used.add(bestIdx);
+      matched++;
+    }
+  }
+  return matched === small.length && matched >= 2;
 }
 
 export function normalizeName(name: string): string {
