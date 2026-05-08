@@ -14,10 +14,10 @@
 /coverage
 
 # next.js — exclude everything except the standalone production build
-.next
-!.next/standalone
+.next/*
+!.next/standalone/
 !.next/standalone/**
-out
+out/
 
 # production
 /build
