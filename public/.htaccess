@@ -1,0 +1,2 @@
+# Allow file uploads up to 10 MB (matches app limit in /api/check)
+LimitRequestBody 10485760
