@@ -138,27 +138,56 @@ function decodeHtml(s: string): string {
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)));
 }
 
-// Defensive Coursera HTML name extraction. Coursera changes markup occasionally,
-// so we try multiple patterns and return the first hit.
-function parseCourseraName(html: string): string | null {
-  const patterns: RegExp[] = [
-    // og:title content like: "Ivan Ivanov earned a Coursera certificate ..."
+// Coursera SSRs the page with `window.__APOLLO_STATE__ = {...}`. The query for a verify
+// page is keyed by `MembershipsV1Resource({"code":"<CERT_ID>"})`.
+//   - For invalid cert → that key's value is literally `null`.
+//   - For valid cert → the value is an object reference like `{"__ref":"VerifiedCertificate:..."}`,
+//     and the recipient's full name is on the `VerifiedCertificate` entity (or related types).
+function parseCourseraApolloState(html: string, certId: string): {
+  exists: boolean;
+  foundName: string | null;
+} {
+  const apolloIdx = html.indexOf("__APOLLO_STATE__");
+  // Look for the lookup key in the JSON. Backslash-escaped because Coursera writes the key as `MembershipsV1Resource({\"code\":\"...\"})`.
+  const codeRe = new RegExp(
+    `MembershipsV1Resource\\(\\{\\\\?"code\\\\?":\\\\?"${certId}\\\\?"\\}\\)\\\\?":\\s*(null|\\{[^}]*\\})`,
+    "i"
+  );
+  const codeMatch = html.match(codeRe);
+  let exists = false;
+  if (codeMatch) {
+    if (codeMatch[1].trim() === "null") {
+      return { exists: false, foundName: null };
+    }
+    exists = true;
+  } else if (apolloIdx >= 0) {
+    // Coursera occasionally changes the GraphQL field name. Fall back: look for `:null` near our cert ID.
+    const certNullRe = new RegExp(`"${certId}\\\\?"[^a-zA-Z0-9]{0,20}\\}\\)\\\\?":\\s*null`, "i");
+    if (certNullRe.test(html)) return { exists: false, foundName: null };
+    // Treat presence of cert ID anywhere in Apollo state as a positive signal.
+    if (html.indexOf(certId, apolloIdx) >= 0) exists = true;
+  }
+
+  // Try to extract the recipient name from VerifiedCertificate entity.
+  const namePatterns: RegExp[] = [
+    /"VerifiedCertificate:[^"]*":\s*\{[^}]*?"fullName":"([^"]{2,120})"/i,
+    /"VerifiedCertificate:[^"]*":\s*\{[^}]*?"name":"([^"]{2,120})"/i,
+    /"recipientFullName":"([^"]{2,120})"/i,
+    /"learnerName":"([^"]{2,120})"/i,
     /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+?)\s+(?:earned|completed|has earned)/i,
     /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+?)\s+(?:earned|completed|has earned)/i,
-    // Title tag fallback
     /<title>([^<|]+?)\s+(?:earned|completed|has earned)/i,
-    // Page heading: "Completed by Иванов И.И."
-    /Completed by\s*<[^>]*>([^<]+?)<\/[^>]+>/i,
-    /Completed by\s+([^<\n]{2,80}?)\s*(?:<|\.|,)/i,
   ];
-  for (const re of patterns) {
+  for (const re of namePatterns) {
     const m = html.match(re);
     if (m && m[1]) {
       const name = decodeHtml(m[1]).trim();
-      if (name.length >= 2 && name.length <= 120) return name;
+      if (name.length >= 2 && name.length <= 120 && name.toLowerCase() !== "unknown") {
+        return { exists: true, foundName: name };
+      }
     }
   }
-  return null;
+  return { exists, foundName: null };
 }
 
 export async function verifyCoursera(
@@ -197,12 +226,19 @@ export async function verifyCoursera(
       };
     }
     const html = await res.text();
-    const foundName = parseCourseraName(html);
-    if (!foundName) {
-      // Live page but couldn't extract name — likely "certificate not found" page
+    const { exists, foundName } = parseCourseraApolloState(html, certId);
+    if (!exists) {
       return {
         url, status: "not_found", foundName: null, expectedName,
-        httpStatus: res.status, error: "Сертификат маълумоти топилмади",
+        httpStatus: res.status, error: "Сертификат топилмади",
+      };
+    }
+    // Cert is real but we couldn't extract a name from the SSR'd state.
+    // Page is verified-alive — return verified without a name match.
+    if (!foundName) {
+      return {
+        url, status: "verified", foundName: null, expectedName,
+        httpStatus: res.status, error: null,
       };
     }
     if (!expectedName) {
@@ -215,7 +251,7 @@ export async function verifyCoursera(
       foundName,
       expectedName,
       httpStatus: res.status,
-      error: ok ? null : "Имя на сертификате не совпадает",
+      error: ok ? null : "ФИО мос келмайди",
     };
   } catch (e) {
     const err = e as { name?: string; message?: string };
@@ -231,27 +267,105 @@ export async function verifyCoursera(
   }
 }
 
-// AiStudy: HEAD-only check (we don't yet know the page structure for name parsing)
+// AiStudy verification uses the public certificate API discovered by inspecting
+// the OMP frontend bundle: GET https://api.aistudy.uz/api/StudyAILms/Certificate/GetGeneratedCertificate?certificateId={id}
+//   - 200 + result.userDataJson with FirstName/LastName/SurName → cert exists
+//   - 404 + error: "Generated Certificate not found." → cert does not exist
+// AiStudy stores names in upper case and sometimes swaps First/Last.
 export async function verifyAistudy(
   url: string,
   expectedName: string | null,
   timeoutMs = 8000
 ): Promise<VerifyResult> {
-  const r = await checkOne(url, timeoutMs);
-  if (r.status === "alive") {
-    return { url, status: "verified", foundName: null, expectedName, httpStatus: r.httpStatus, error: null };
+  const m = url.match(AISTUDY_RE);
+  if (!m) {
+    return { url, status: "dead", foundName: null, expectedName, httpStatus: null, error: "URL формат носат." };
   }
-  if (r.status === "timeout") {
-    return { url, status: "timeout", foundName: null, expectedName, httpStatus: null, error: "timeout" };
+  const certId = m[1];
+  const apiUrl = `https://api.aistudy.uz/api/StudyAILms/Certificate/GetGeneratedCertificate?certificateId=${certId}`;
+
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(apiUrl, {
+      method: "GET",
+      signal: ac.signal,
+      redirect: "follow",
+      headers: {
+        "Accept": "application/json",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
+
+    if (res.status === 404) {
+      return { url, status: "not_found", foundName: null, expectedName, httpStatus: 404, error: "Сертификат топилмади" };
+    }
+    if (res.status < 200 || res.status >= 400) {
+      return {
+        url, status: "dead", foundName: null, expectedName,
+        httpStatus: res.status, error: `HTTP ${res.status}`,
+      };
+    }
+
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      return {
+        url, status: "dead", foundName: null, expectedName,
+        httpStatus: res.status, error: "Жавоб формати нотўғри",
+      };
+    }
+
+    const b = body as { statusCode?: number; result?: { userDataJson?: string } | null; error?: string };
+    if (b.statusCode === 404 || !b.result || !b.result.userDataJson) {
+      return {
+        url, status: "not_found", foundName: null, expectedName,
+        httpStatus: res.status, error: b.error ?? "Сертификат топилмади",
+      };
+    }
+
+    let userData: { FirstName?: string; LastName?: string; SurName?: string } = {};
+    try {
+      userData = JSON.parse(b.result.userDataJson);
+    } catch {
+      // Cert exists but user data is not parseable → still verified
+      return { url, status: "verified", foundName: null, expectedName, httpStatus: res.status, error: null };
+    }
+
+    const parts = [userData.LastName, userData.FirstName, userData.SurName]
+      .map((s) => (s ?? "").trim())
+      .filter(Boolean);
+    const foundName = parts.length ? parts.join(" ") : null;
+
+    if (!foundName) {
+      return { url, status: "verified", foundName: null, expectedName, httpStatus: res.status, error: null };
+    }
+    if (!expectedName) {
+      return { url, status: "verified", foundName, expectedName: null, httpStatus: res.status, error: null };
+    }
+    const ok = namesMatch(expectedName, foundName);
+    return {
+      url,
+      status: ok ? "verified" : "name_mismatch",
+      foundName,
+      expectedName,
+      httpStatus: res.status,
+      error: ok ? null : "ФИО мос келмайди",
+    };
+  } catch (e) {
+    const err = e as { name?: string; message?: string };
+    if (err?.name === "AbortError" || err?.name === "TimeoutError") {
+      return { url, status: "timeout", foundName: null, expectedName, httpStatus: null, error: "timeout" };
+    }
+    return {
+      url, status: "dead", foundName: null, expectedName,
+      httpStatus: null, error: err?.message ?? "network error",
+    };
+  } finally {
+    clearTimeout(t);
   }
-  return {
-    url,
-    status: r.httpStatus === 404 ? "not_found" : "dead",
-    foundName: null,
-    expectedName,
-    httpStatus: r.httpStatus,
-    error: r.error,
-  };
 }
 
 export async function verifyOne(

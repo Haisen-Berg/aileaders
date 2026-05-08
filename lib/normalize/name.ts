@@ -48,10 +48,15 @@ export function cyrillicToLatin(s: string): string {
 
 function normalizeForMatch(name: string): string {
   let n = name.trim().toLowerCase();
+  // Normalize all apostrophe-like marks to ASCII apostrophe (Uzbek o'g'li / ўғли variants).
+  // Includes: backtick `, U+02BB ʻ, U+02BC ʼ, U+2018 ', U+2019 ', U+0301 (combining acute).
+  n = n.replace(/[`ʻʼ‘’`́]/g, "'");
   // Transliterate Cyrillic to Latin for unified comparison
   n = cyrillicToLatin(n);
-  // Remove punctuation except apostrophe (o', g')
-  n = n.replace(/[^a-z0-9'\s]/g, "");
+  // Drop apostrophes after transliteration so "o'g'li" / "ogli" / "ogly" all collapse.
+  n = n.replace(/'/g, "");
+  // Remove punctuation
+  n = n.replace(/[^a-z0-9\s]/g, "");
   // Collapse whitespace, sort tokens for order-independent match
   return n
     .split(/\s+/)
