@@ -13,11 +13,14 @@
 # testing
 /coverage
 
-# next.js — exclude everything except the standalone production build
+# next.js — exclude everything except the standalone build + static assets.
+# Use .next/* (not .next) so git can process the negation patterns for subdirs.
 .next/*
-!.next/standalone/
+!.next/standalone
 !.next/standalone/**
-out/
+!.next/static
+!.next/static/**
+out
 
 # production
 /build

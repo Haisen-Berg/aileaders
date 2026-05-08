@@ -1,11 +1,24 @@
 import https from "node:https";
 import { AISTUDY_RE, COURSERA_RE } from "@/lib/xlsx/parser";
-import { namesMatch } from "@/lib/normalize/name";
+import { namesMatchWithAi } from "@/lib/ai/name-match";
 
 // Some cert-verification domains (aistudy.uz, coursera.org) use CA chains not trusted
 // by the server's Node.js store. We use a single permissive agent scoped only to this
 // module's outbound HTTPS — global SSL verification is unchanged.
 const PERMISSIVE_AGENT = new https.Agent({ rejectUnauthorized: false });
+
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+];
+
+function pickUserAgent(): string {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface SimpleResponse {
   status: number;
@@ -262,8 +275,7 @@ export async function verifyCoursera(
     const res = await fetchInsecure(
       verifyUrl,
       {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": pickUserAgent(),
         Accept: "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.9",
       },
@@ -297,7 +309,7 @@ export async function verifyCoursera(
     if (!expectedName) {
       return { url, status: "verified", foundName, expectedName: null, httpStatus: res.status, error: null };
     }
-    const ok = namesMatch(expectedName, foundName);
+    const ok = await namesMatchWithAi(expectedName, foundName);
     return {
       url,
       status: ok ? "verified" : "name_mismatch",
@@ -340,16 +352,28 @@ export async function verifyAistudy(
 
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetchInsecure(
+
+  // AiStudy occasionally returns 403 to server-origin requests. Retry once with
+  // a different UA + browser-like headers before giving up.
+  async function tryFetch(): Promise<SimpleResponse> {
+    return fetchInsecure(
       apiUrl,
       {
-        Accept: "application/json",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "application/json, text/plain, */*",
+        "User-Agent": pickUserAgent(),
+        Origin: "https://omp.aistudy.uz",
+        Referer: `https://omp.aistudy.uz/certificate?id=${certId}`,
+        "Accept-Language": "uz-UZ,uz;q=0.9,ru;q=0.8,en;q=0.7",
       },
       ac.signal
     );
+  }
+  try {
+    let res = await tryFetch();
+    if (res.status === 403) {
+      await sleep(800 + Math.floor(Math.random() * 700));
+      res = await tryFetch();
+    }
 
     if (res.status === 404) {
       return { url, status: "not_found", foundName: null, expectedName, httpStatus: 404, error: "Сертификат топилмади" };
@@ -398,7 +422,7 @@ export async function verifyAistudy(
     if (!expectedName) {
       return { url, status: "verified", foundName, expectedName: null, httpStatus: res.status, error: null };
     }
-    const ok = namesMatch(expectedName, foundName);
+    const ok = await namesMatchWithAi(expectedName, foundName);
     return {
       url,
       status: ok ? "verified" : "name_mismatch",

@@ -52,10 +52,12 @@ function cellStr(row: ExcelJS.Row, col: number): string | null {
 // Without the prefix, browsers treat them as relative paths and `fetch()` errors with
 // "Invalid URL". Force-prepend https:// when missing.
 function normalizeUrl(s: string): string {
-  const trimmed = s.trim();
-  if (!trimmed) return trimmed;
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return "https://" + trimmed.replace(/^\/+/, "");
+  // Excel cells often contain stray spaces/newlines inside the URL
+  // ("https:// coursera.org/verify/X") — strip ALL whitespace.
+  const cleaned = s.replace(/\s+/g, "");
+  if (!cleaned) return cleaned;
+  if (/^https?:\/\//i.test(cleaned)) return cleaned;
+  return "https://" + cleaned.replace(/^\/+/, "");
 }
 
 // For URL columns: prefer hyperlink target over display text.
@@ -148,7 +150,7 @@ export async function parseXlsx(buffer: ArrayBuffer): Promise<ParsedRow[]> {
     if (aiUrl && !aiCert) errors.push({
       row: rowNumber, name: fullName, district, organization,
       position: positionCanonical, platform: "aistudy", url: aiUrl,
-      reason: "AiStudy ссылкасининг форматы нотўғри",
+      reason: "AiStudy ссылкасининг формати нотўғри",
     });
     if (aiCert) certs.push(aiCert);
 
@@ -156,7 +158,7 @@ export async function parseXlsx(buffer: ArrayBuffer): Promise<ParsedRow[]> {
     if (coUrl && !coCert) errors.push({
       row: rowNumber, name: fullName, district, organization,
       position: positionCanonical, platform: "coursera", url: coUrl,
-      reason: "Coursera ссылкасининг форматы нотўғри",
+      reason: "Coursera ссылкасининг формати нотўғри",
     });
     if (coCert) certs.push(coCert);
 

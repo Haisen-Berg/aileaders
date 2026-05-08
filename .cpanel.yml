@@ -3,7 +3,13 @@ deployment:
   tasks:
     - export DEPLOYPATH=/home/xqaiuz/repositories/aileaders/
     - cd $DEPLOYPATH
-    - rm -rf _next
-    - mkdir -p _next/static
-    - /bin/cp -r .next/standalone/.next/static/. _next/static/
-    - echo "Static assets mirrored to _next/static/ for direct Apache serving"
+    # Next standalone places the server in .next/standalone but static is at .next/static.
+    # Copy static into the standalone tree (where server.js expects it) AND mirror to
+    # _next/static for direct Apache serving (faster than going through Node).
+    - rm -rf .next/standalone/.next/static _next
+    - mkdir -p .next/standalone/.next/static _next/static
+    - /bin/cp -r .next/static/. .next/standalone/.next/static/
+    - /bin/cp -r .next/static/. _next/static/
+    # Public assets (favicon etc) should also be served alongside the standalone build
+    - if [ -d public ]; then /bin/cp -r public/. .next/standalone/public/ 2>/dev/null || true; fi
+    - echo "Static + public assets mirrored for cPanel deployment"

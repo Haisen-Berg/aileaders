@@ -46,6 +46,28 @@ export function cyrillicToLatin(s: string): string {
   return r;
 }
 
+// Phonetic folding: Latin spellings of Uzbek/Russian names drift by 1-2 chars
+// (Zuleyha vs Zulayho, Karimov vs Karimof, Akhmedov vs Axmedov). Reduce these
+// systematic variations before similarity scoring.
+function phoneticFold(s: string): string {
+  return s
+    .replace(/kh/g, "x")
+    .replace(/gh/g, "g")
+    .replace(/tch/g, "ch")
+    .replace(/sch/g, "sh")
+    .replace(/yo/g, "o")
+    .replace(/yu/g, "u")
+    .replace(/ya/g, "a")
+    // Diphthongs that vary across transliterations
+    .replace(/[iey]y/g, "y")
+    .replace(/ay|ey|iy|uy|oy/g, (m) => m[0])
+    // Trailing variations: -off / -ov, -ova / -ova, -a / -o
+    .replace(/ff$/g, "v")
+    .replace(/ph/g, "f")
+    // Collapse doubled consonants
+    .replace(/([bcdfghjklmnpqrstvwxz])\1+/g, "$1");
+}
+
 function normalizeForMatch(name: string): string {
   let n = name.trim().toLowerCase();
   // Normalize all apostrophe-like marks to ASCII apostrophe (Uzbek o'g'li / ўғли variants).
@@ -57,6 +79,7 @@ function normalizeForMatch(name: string): string {
   n = n.replace(/'/g, "");
   // Remove punctuation
   n = n.replace(/[^a-z0-9\s]/g, "");
+  n = phoneticFold(n);
   // Collapse whitespace, sort tokens for order-independent match
   return n
     .split(/\s+/)
@@ -89,10 +112,17 @@ function tokenSimilarity(a: string, b: string): number {
   return 1 - levenshtein(a, b) / max;
 }
 
-// Per-token fuzzy match. Each token in the shorter name must find a distinct
-// token in the longer name with similarity ≥ 0.8 (~1 char diff per 5–7 chars).
-// Tolerates: missing patronymic (FI vs FIO), Cyrillic↔Latin transliteration
-// drift (Sultonov/Sultanov, Karimov/Karimof), apostrophe/spacing differences.
+// Per-token fuzzy match. Tolerates: missing patronymic (FI vs FIO),
+// Cyrillic↔Latin transliteration drift (Sultonov/Sultanov, Karimov/Karimof,
+// Zuleyha/Zulayho), apostrophe/spacing differences.
+// Threshold is dynamic: longer tokens tolerate more absolute character drift,
+// short ones (≤4) need to be near-exact to avoid false positives.
+function tokenThreshold(tokenLen: number): number {
+  if (tokenLen <= 4) return 0.75;
+  if (tokenLen <= 6) return 0.7;
+  return 0.65;
+}
+
 export function namesMatch(dbName: string, certName: string): boolean {
   if (!dbName || !certName) return false;
   const A = normalizeForMatch(dbName).split(" ").filter(Boolean);
@@ -113,7 +143,8 @@ export function namesMatch(dbName: string, certName: string): boolean {
         bestIdx = i;
       }
     }
-    if (bestSim >= 0.8 && bestIdx >= 0) {
+    const thr = tokenThreshold(Math.max(t.length, bestIdx >= 0 ? big[bestIdx].length : 0));
+    if (bestSim >= thr && bestIdx >= 0) {
       used.add(bestIdx);
       matched++;
     }

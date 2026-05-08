@@ -102,7 +102,15 @@ interface PreviewRow {
   position: string;
   aiUrl: string | null;
   coUrl: string | null;
+  aiCourse: string | null;
+  coCourse: string | null;
   hasErrors: boolean;
+}
+
+interface DuplicateGroup {
+  url: string;
+  rows: number[];
+  names: (string | null)[];
 }
 
 interface CertItem {
@@ -123,6 +131,7 @@ interface CheckResult {
   coursera: number;
   both: number;
   duplicatesInFile: number;
+  duplicateGroups: DuplicateGroup[];
   errors: ErrorDetail[];
   districtStats: DistrictStat[];
   orgStats: OrgStat[];
@@ -381,6 +390,45 @@ interface RowCheck {
   error?: string | null;
 }
 
+function StatusBadge({ check, label }: { check: RowCheck | undefined; label: string }) {
+  if (!check) return null;
+  const s = check.status;
+  let cls = "bg-slate-50 text-slate-500 border-slate-200";
+  let icon = "•";
+  let text: string = label;
+  if (s === "checking") { icon = "⏳"; text = `${label}: текширилмоқда`; cls = "bg-slate-50 text-slate-500 border-slate-200"; }
+  else if (s === "verified") { icon = "✓"; text = `${label}: тасдиқланди${check.foundName ? ` — ${check.foundName}` : ""}`; cls = "bg-emerald-50 text-emerald-700 border-emerald-200"; }
+  else if (s === "name_mismatch") { icon = "⚠"; text = `${label}: ФИО мос эмас${check.foundName ? ` (${check.foundName})` : ""}`; cls = "bg-amber-50 text-amber-700 border-amber-200"; }
+  else if (s === "not_found") { icon = "✗"; text = `${label}: топилмади`; cls = "bg-red-50 text-red-700 border-red-200"; }
+  else if (s === "dead" || s === "timeout") { icon = "✗"; text = `${label}: ${check.error ?? (s === "timeout" ? "таймаут" : "хато")}`; cls = "bg-red-50 text-red-700 border-red-200"; }
+  return (
+    <div className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] leading-tight ${cls} max-w-[220px]`}>
+      <span className="shrink-0">{icon}</span>
+      <span className="truncate">{text}</span>
+    </div>
+  );
+}
+
+function StatusCell({
+  rowChecks, aiKey, coKey, hasAi, hasCo,
+}: {
+  rowChecks: Record<string, RowCheck>;
+  aiKey: string;
+  coKey: string;
+  hasAi: boolean;
+  hasCo: boolean;
+}) {
+  const ai = hasAi ? rowChecks[aiKey] : undefined;
+  const co = hasCo ? rowChecks[coKey] : undefined;
+  if (!ai && !co) return <span className="text-slate-300 text-xs">—</span>;
+  return (
+    <div className="flex flex-col gap-1">
+      {ai && <StatusBadge check={ai} label="AI" />}
+      {co && <StatusBadge check={co} label="Co" />}
+    </div>
+  );
+}
+
 export function UploadForm() {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -396,6 +444,8 @@ export function UploadForm() {
   const [linkSample, setLinkSample] = useState<LinkSampleSummary | null>(null);
   const [linkSampleStatus, setLinkSampleStatus] = useState<"idle" | "checking" | "error">("idle");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [sortKey, setSortKey] = useState<"row" | "name" | "district" | "organization">("row");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [verifyProgress, setVerifyProgress] = useState<{
     status: "idle" | "running" | "done";
     done: number; total: number;
@@ -536,32 +586,33 @@ export function UploadForm() {
         const data = await res.json();
         const results: Array<{ url: string; status: VerifyStatus; foundName: string | null; error: string | null }> =
           data.results ?? [];
+        // Count synchronously — React 19 StrictMode can double-invoke setState
+        // updaters, which corrupted these counters when they lived inside it.
+        for (let j = 0; j < chunk.length; j++) {
+          const r = results[j];
+          if (r?.status === "verified") verified++;
+          else if (r?.status === "name_mismatch") mismatch++;
+          else dead++;
+        }
         setRowChecks((prev) => {
           const next = { ...prev };
           for (let j = 0; j < chunk.length; j++) {
             const it = chunk[j];
             const r = results[j];
             const key = `${it.rowNumber}:${it.platform === "aistudy" ? "ai" : "co"}`;
-            if (r) {
-              next[key] = { status: r.status, foundName: r.foundName, error: r.error };
-              if (r.status === "verified") verified++;
-              else if (r.status === "name_mismatch") mismatch++;
-              else dead++;
-            } else {
-              next[key] = { status: "dead", error: "no result" };
-              dead++;
-            }
+            next[key] = r
+              ? { status: r.status, foundName: r.foundName, error: r.error }
+              : { status: "dead", error: "no result" };
           }
           return next;
         });
       } catch {
-        // mark this chunk as dead
+        dead += chunk.length;
         setRowChecks((prev) => {
           const next = { ...prev };
           for (const it of chunk) {
             const key = `${it.rowNumber}:${it.platform === "aistudy" ? "ai" : "co"}`;
             next[key] = { status: "dead", error: "network" };
-            dead++;
           }
           return next;
         });
@@ -620,8 +671,29 @@ export function UploadForm() {
       if (!groups.has(k)) groups.set(k, { key: k, rows: [] });
       groups.get(k)!.rows.push(r);
     }
-    return [...groups.values()];
-  }, [result]);
+    const arr = [...groups.values()];
+    const dir = sortDir === "asc" ? 1 : -1;
+    const cmp = (a: string | number | null, b: string | number | null) => {
+      if (a == null && b == null) return 0;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      if (typeof a === "number" && typeof b === "number") return (a - b) * dir;
+      return String(a).localeCompare(String(b), "uz-Latn") * dir;
+    };
+    arr.sort((g1, g2) => {
+      const a = g1.rows[0], b = g2.rows[0];
+      if (sortKey === "row") return cmp(a.row, b.row);
+      if (sortKey === "name") return cmp(a.name, b.name);
+      if (sortKey === "district") return cmp(a.district, b.district);
+      return cmp(a.organization, b.organization);
+    });
+    return arr;
+  }, [result, sortKey, sortDir]);
+
+  function toggleSort(key: "row" | "name" | "district" | "organization") {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  }
 
   // Lock body scroll while iframe modal is open
   useEffect(() => {
@@ -890,15 +962,49 @@ export function UploadForm() {
 
               {/* Alert banners */}
               {result.duplicatesInFile > 0 && (
-                <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-4">
-                  <IC.AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold text-amber-800 text-sm">Файл ичида дубликатлар топилди</p>
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      {result.duplicatesInFile} та сертификат бир нечта марта учради — улар жами статистикага кирмайди.
-                    </p>
-                  </div>
-                </div>
+                <details className="bg-amber-50 border border-amber-200 rounded-2xl p-4 group">
+                  <summary className="flex items-start gap-3 cursor-pointer list-none">
+                    <IC.AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="font-semibold text-amber-800 text-sm">
+                        Файл ичида дубликатлар топилди
+                        <span className="ml-2 text-xs font-normal text-amber-600 group-open:hidden">
+                          (босинг — кўрсатиш)
+                        </span>
+                      </p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        {result.duplicatesInFile} та сертификат бир нечта марта учради — улар жами статистикага кирмайди.
+                      </p>
+                    </div>
+                  </summary>
+                  {result.duplicateGroups && result.duplicateGroups.length > 0 && (
+                    <div className="mt-3 space-y-2 pl-8">
+                      {result.duplicateGroups.map((g, i) => (
+                        <div key={i} className="bg-white border border-amber-100 rounded-xl p-3 text-xs">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="font-semibold text-amber-800">
+                              {g.rows.length}× — сатрлар: {g.rows.join(", ")}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => navigator.clipboard.writeText(g.url)}
+                              className="text-amber-600 hover:text-amber-800 cursor-pointer p-0.5"
+                              title="Нусха олиш"
+                            >
+                              <IC.Copy className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <p className="font-mono text-[10px] text-slate-500 break-all">{g.url}</p>
+                          {g.names.some(Boolean) && (
+                            <p className="text-[10px] text-slate-400 mt-1">
+                              ФИО: {[...new Set(g.names.filter(Boolean))].join(" / ")}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </details>
               )}
               {result.errors.length > 0 && (
                 <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-2xl p-4">
@@ -1411,7 +1517,27 @@ export function UploadForm() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        {["#", "ФИО", "Ҳудуд", "Ташкилот", "AiStudy", "Coursera"].map((h) => (
+                        {([
+                          { id: "row", label: "#" },
+                          { id: "name", label: "ФИО" },
+                          { id: "district", label: "Ҳудуд" },
+                          { id: "organization", label: "Ташкилот" },
+                        ] as const).map((h) => {
+                          const active = sortKey === h.id;
+                          return (
+                            <th
+                              key={h.id}
+                              onClick={() => toggleSort(h.id)}
+                              className="text-left px-3 py-3 text-xs font-semibold text-slate-400 whitespace-nowrap cursor-pointer select-none hover:text-slate-700"
+                            >
+                              {h.label}
+                              <span className={`ml-1 text-[10px] ${active ? "text-blue-500" : "text-slate-300"}`}>
+                                {active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}
+                              </span>
+                            </th>
+                          );
+                        })}
+                        {["AiStudy", "Coursera", "Ҳолат"].map((h) => (
                           <th key={h} className="text-left px-3 py-3 text-xs font-semibold text-slate-400 whitespace-nowrap">
                             {h}
                           </th>
@@ -1487,39 +1613,66 @@ export function UploadForm() {
                                   />
                                 )}
                               </td>
+                              <td className="px-3 py-2.5">
+                                {isMulti ? (
+                                  <span className="text-[10px] text-slate-400">
+                                    {group.rows.length} та сертификат
+                                  </span>
+                                ) : (
+                                  <StatusCell
+                                    rowChecks={rowChecks}
+                                    aiKey={`${head.row}:ai`}
+                                    coKey={`${head.row}:co`}
+                                    hasAi={!!head.aiUrl}
+                                    hasCo={!!head.coUrl}
+                                  />
+                                )}
+                              </td>
                             </tr>
-                            {isMulti && expanded && group.rows.map((row, ri) => (
-                              <tr key={`${group.key}-${ri}`} className="border-b border-slate-100 bg-blue-50/20">
-                                <td className="px-3 py-2 text-[11px] text-slate-400 font-mono pl-8 whitespace-nowrap">
-                                  ↳ {row.row}
-                                </td>
-                                <td colSpan={3} className="px-3 py-2 text-[11px] text-slate-400">
-                                  Сертификат #{ri + 1}
-                                </td>
-                                <td className="px-3 py-2">
-                                  <UrlCell
-                                    url={row.aiUrl}
-                                    accent="cyan"
-                                    checkKey={`${row.row}:ai`}
-                                    check={rowChecks[`${row.row}:ai`]}
-                                    expectedName={row.name}
-                                    onCheck={handleRowCheck}
-                                    onPreview={setPreviewUrl}
-                                  />
-                                </td>
-                                <td className="px-3 py-2">
-                                  <UrlCell
-                                    url={row.coUrl}
-                                    accent="violet"
-                                    checkKey={`${row.row}:co`}
-                                    check={rowChecks[`${row.row}:co`]}
-                                    expectedName={row.name}
-                                    onCheck={handleRowCheck}
-                                    onPreview={setPreviewUrl}
-                                  />
-                                </td>
-                              </tr>
-                            ))}
+                            {isMulti && expanded && group.rows.map((row, ri) => {
+                              const courseName = row.coCourse ?? row.aiCourse ?? `Сертификат #${ri + 1}`;
+                              return (
+                                <tr key={`${group.key}-${ri}`} className="border-b border-slate-100 bg-blue-50/20">
+                                  <td className="px-3 py-2 text-[11px] text-slate-400 font-mono pl-8 whitespace-nowrap">
+                                    ↳ {row.row}
+                                  </td>
+                                  <td colSpan={3} className="px-3 py-2 text-[11px] text-slate-600 max-w-[300px] truncate" title={courseName}>
+                                    {courseName}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <UrlCell
+                                      url={row.aiUrl}
+                                      accent="cyan"
+                                      checkKey={`${row.row}:ai`}
+                                      check={rowChecks[`${row.row}:ai`]}
+                                      expectedName={row.name}
+                                      onCheck={handleRowCheck}
+                                      onPreview={setPreviewUrl}
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <UrlCell
+                                      url={row.coUrl}
+                                      accent="violet"
+                                      checkKey={`${row.row}:co`}
+                                      check={rowChecks[`${row.row}:co`]}
+                                      expectedName={row.name}
+                                      onCheck={handleRowCheck}
+                                      onPreview={setPreviewUrl}
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <StatusCell
+                                      rowChecks={rowChecks}
+                                      aiKey={`${row.row}:ai`}
+                                      coKey={`${row.row}:co`}
+                                      hasAi={!!row.aiUrl}
+                                      hasCo={!!row.coUrl}
+                                    />
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </Fragment>
                         );
                       })}

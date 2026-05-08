@@ -49,7 +49,15 @@ export interface PreviewRow {
   position: string;
   aiUrl: string | null;
   coUrl: string | null;
+  aiCourse: string | null;
+  coCourse: string | null;
   hasErrors: boolean;
+}
+
+export interface DuplicateGroup {
+  url: string;
+  rows: number[];
+  names: (string | null)[];
 }
 
 export interface CertItem {
@@ -70,6 +78,7 @@ export interface CheckResult {
   coursera: number;
   both: number;
   duplicatesInFile: number;
+  duplicateGroups: DuplicateGroup[];
   errors: ParsedError[];
   districtStats: DistrictStat[];
   orgStats: OrgStat[];
@@ -239,16 +248,44 @@ export async function POST(req: NextRequest) {
     certs: categoryAcc[c].certs,
   }));
 
-  const previewRows: PreviewRow[] = rows.slice(0, 200).map((row) => ({
-    row: row.rowNumber,
-    name: row.fullName,
-    district: row.district,
-    organization: row.organization,
-    position: row.positionCanonical,
-    aiUrl: row.certificates.find((c) => c.platform === "aistudy")?.url ?? null,
-    coUrl: row.certificates.find((c) => c.platform === "coursera")?.url ?? null,
-    hasErrors: row.errors.length > 0,
-  }));
+  const previewRows: PreviewRow[] = rows.slice(0, 200).map((row) => {
+    const ai = row.certificates.find((c) => c.platform === "aistudy");
+    const co = row.certificates.find((c) => c.platform === "coursera");
+    return {
+      row: row.rowNumber,
+      name: row.fullName,
+      district: row.district,
+      organization: row.organization,
+      position: row.positionCanonical,
+      aiUrl: ai?.url ?? null,
+      coUrl: co?.url ?? null,
+      aiCourse: ai?.course ?? null,
+      coCourse: co?.course ?? null,
+      hasErrors: row.errors.length > 0,
+    };
+  });
+
+  // Build duplicate groups: hash → first url + all rows/names that contain it
+  const dupGroupMap = new Map<string, DuplicateGroup>();
+  for (const row of rows) {
+    for (const cert of row.certificates) {
+      if (!duplicateHashes.has(cert.urlHash)) continue;
+      const g = dupGroupMap.get(cert.urlHash);
+      if (g) {
+        g.rows.push(row.rowNumber);
+        g.names.push(row.fullName);
+      } else {
+        dupGroupMap.set(cert.urlHash, {
+          url: cert.url,
+          rows: [row.rowNumber],
+          names: [row.fullName],
+        });
+      }
+    }
+  }
+  const duplicateGroups = [...dupGroupMap.values()]
+    .sort((a, b) => b.rows.length - a.rows.length)
+    .slice(0, 100);
 
   return NextResponse.json({
     filename: file.name,
@@ -261,6 +298,7 @@ export async function POST(req: NextRequest) {
     coursera,
     both,
     duplicatesInFile: dups,
+    duplicateGroups,
     errors: allErrors.slice(0, 100),
     districtStats,
     orgStats,
